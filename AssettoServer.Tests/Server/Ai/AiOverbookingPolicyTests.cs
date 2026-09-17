@@ -55,4 +55,35 @@ public class AiOverbookingPolicyTests
 
         Assert.That(target, Is.EqualTo(1));
     }
+
+    [TestCase(-1, 0, null)]
+    [TestCase(0, -1, null)]
+    [TestCase(0, 0, -1)]
+    public void ClampTargetRejectsNegativeInputs(int requested, int minimum, int? maximum)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AiOverbookingPolicy.ClampTarget(requested, minimum, maximum));
+    }
+
+    [Test]
+    public void CalculateTargetsRejectsNegativeDynamicTarget()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AiOverbookingPolicy.CalculateTargets(-1, new[] { 0 }));
+    }
+
+    [Test]
+    public void CalculateTargetsRejectsNegativeMinimum()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AiOverbookingPolicy.CalculateTargets(0, new[] { -1 }));
+    }
+
+    [Test]
+    public void ReservedOnlyAllocationSurvivesWithoutPlayers()
+    {
+        var targets = AiOverbookingPolicy.CalculateTargets(0, new[] { 1 });
+
+        Assert.That(targets, Is.EqualTo(new[] { 1 }));
+    }
 }
