@@ -36,6 +36,7 @@ public partial class EntryCar
     public float AiCorneringBrakeDistanceFactor { get; set; }
     public float AiCorneringBrakeForceFactor { get; set; }
     public float AiSplineHeightOffsetMeters { get; set; }
+    public int AiMinOverbooking { get; set; }
     public int? AiMaxOverbooking { get; set; }
     public int AiMinSpawnProtectionTimeMilliseconds { get; set; }
     public int AiMaxSpawnProtectionTimeMilliseconds { get; set; }
@@ -414,10 +415,7 @@ public partial class EntryCar
         _aiStatesLock.EnterUpgradeableReadLock();
         try
         {
-            if (AiMaxOverbooking.HasValue)
-            {
-                count = Math.Min(count, AiMaxOverbooking.Value);
-            }
+            count = AiOverbookingPolicy.ClampTarget(count, AiMinOverbooking, AiMaxOverbooking);
 
             if (count > _aiStates.Count)
             {

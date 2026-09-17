@@ -444,18 +444,27 @@ public class AiBehavior : CriticalBackgroundService, IAssettoServerAutostart
             Log.Debug("AI Slot overbooking update - no AI slots available");
             return;
         }
-            
-        int targetAiCount = Math.Min(playerCount * Math.Min((int)Math.Round(_configuration.Extra.AiParams.AiPerPlayerTargetCount * _configuration.Extra.AiParams.TrafficDensity), aiSlots.Count), _configuration.Extra.AiParams.MaxAiTargetCount);
 
-        int overbooking = targetAiCount / aiSlots.Count;
-        int rest = targetAiCount % aiSlots.Count;
+        int dynamicAiSlotCount = aiSlots.Count(car => car.AiMinOverbooking == 0);
+        int perPlayerTargetCount = Math.Min(
+            (int)Math.Round(_configuration.Extra.AiParams.AiPerPlayerTargetCount * _configuration.Extra.AiParams.TrafficDensity),
+            dynamicAiSlotCount);
+        int targetAiCount = Math.Min(
+            playerCount * perPlayerTargetCount,
+            _configuration.Extra.AiParams.MaxAiTargetCount);
+
+        int overbooking = dynamicAiSlotCount == 0 ? 0 : targetAiCount / dynamicAiSlotCount;
+        int rest = dynamicAiSlotCount == 0 ? 0 : targetAiCount % dynamicAiSlotCount;
+        var targets = AiOverbookingPolicy.CalculateTargets(
+            targetAiCount,
+            aiSlots.Select(car => car.AiMinOverbooking).ToArray());
             
-        Log.Debug("AI Slot overbooking update - No. players: {NumPlayers} - No. AI Slots: {NumAiSlots} - Target AI count: {TargetAiCount} - Overbooking: {Overbooking} - Rest: {Rest}", 
-            playerCount, aiSlots.Count, targetAiCount, overbooking, rest);
+        Log.Debug("AI Slot overbooking update - No. players: {NumPlayers} - No. AI Slots: {NumAiSlots} - Reserved AI Slots: {NumReservedAiSlots} - Target AI count: {TargetAiCount} - Overbooking: {Overbooking} - Rest: {Rest}",
+            playerCount, dynamicAiSlotCount, aiSlots.Count - dynamicAiSlotCount, targetAiCount, overbooking, rest);
 
         for (int i = 0; i < aiSlots.Count; i++)
         {
-            aiSlots[i].SetAiOverbooking(i < rest ? overbooking + 1 : overbooking);
+            aiSlots[i].SetAiOverbooking(targets[i]);
         }
     }
 
