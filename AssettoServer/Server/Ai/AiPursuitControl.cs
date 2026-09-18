@@ -35,11 +35,24 @@ public sealed record AiPursuitRouteDiagnostics(
     int VisitedNodes,
     IReadOnlyList<AiPursuitJunctionDecision> JunctionDecisions);
 
+public sealed record AiPursuitSearchDiagnostics(
+    int PolicePointId,
+    int? PreviousTargetPointId,
+    int? SelectedTargetPointId,
+    IReadOnlyList<int> SpatialPointIds,
+    IReadOnlyList<int> LaneEquivalentPointIds,
+    IReadOnlyList<AiPursuitTargetRejection> Rejections,
+    AiRouteSearchFailure SearchFailure,
+    int VisitedNodes,
+    float MaximumExploredDistanceMeters,
+    int JunctionEdgesExamined);
+
 public sealed record AiPursuitTrackingResult(
     AiPursuitTrackingStatus Status,
     float? RouteDistanceMeters,
     float TargetSpeedMetersPerSecond,
-    AiPursuitRouteDiagnostics? RouteDiagnostics = null);
+    AiPursuitRouteDiagnostics? RouteDiagnostics = null,
+    AiPursuitSearchDiagnostics? SearchDiagnostics = null);
 
 internal sealed record AiPursuitSnapshot(
     byte TargetSessionId,
@@ -95,6 +108,28 @@ public static class AiPursuitControl
             navigation.State.Plan.DistanceMeters,
             navigation.VisitedNodes,
             decisions);
+    }
+
+    public static AiPursuitSearchDiagnostics CreateSearchDiagnostics(
+        AiPursuitNavigationResult navigation,
+        int policePointId,
+        int? previousTargetPointId)
+    {
+        ArgumentNullException.ThrowIfNull(navigation);
+        var location = navigation.TargetLocationDiagnostics;
+        return new AiPursuitSearchDiagnostics(
+            policePointId,
+            previousTargetPointId,
+            navigation.Status == AiPursuitNavigationStatus.Active
+                ? navigation.State?.TargetPointId
+                : null,
+            location.SpatialPointIds,
+            location.LaneEquivalentPointIds,
+            location.Rejections,
+            navigation.SearchFailure,
+            navigation.VisitedNodes,
+            navigation.MaximumExploredDistanceMeters,
+            navigation.JunctionEdgesExamined);
     }
 
     public static void ValidateDesiredSpeed(float speed)

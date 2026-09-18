@@ -16,6 +16,27 @@ public readonly record struct AiPursuitTargetCandidate(
     float DistanceSquared,
     float DirectionAlignment);
 
+public enum AiPursuitTargetRejectionReason
+{
+    InvalidDistance,
+    OutsideMaximumDistance,
+    MissingForwardDirection,
+    OppositeDirection
+}
+
+public readonly record struct AiPursuitTargetRejection(
+    int PointId,
+    AiPursuitTargetRejectionReason Reason);
+
+public sealed record AiPursuitTargetLocationDiagnostics(
+    IReadOnlyList<int> SpatialPointIds,
+    IReadOnlyList<int> LaneEquivalentPointIds,
+    IReadOnlyList<AiPursuitTargetRejection> Rejections);
+
+public sealed record AiPursuitTargetLocationResult(
+    IReadOnlyList<AiPursuitTargetCandidate> Candidates,
+    AiPursuitTargetLocationDiagnostics Diagnostics);
+
 public sealed class AiPursuitTargetLocator
 {
     private const float DirectionSpeedThreshold = 2.0f;
@@ -50,6 +71,17 @@ public sealed class AiPursuitTargetLocator
         Vector3 position,
         Vector3 velocity,
         float maximumDistanceSquared,
+        int maximumCandidates) =>
+        LocateCandidates(
+            position,
+            velocity,
+            maximumDistanceSquared,
+            maximumCandidates).Candidates;
+
+    public AiPursuitTargetLocationResult LocateCandidates(
+        Vector3 position,
+        Vector3 velocity,
+        float maximumDistanceSquared,
         int maximumCandidates)
     {
         if (!float.IsFinite(maximumDistanceSquared) || maximumDistanceSquared < 0)
@@ -61,32 +93,28 @@ public sealed class AiPursuitTargetLocator
         var hasDirection = speed >= DirectionSpeedThreshold;
         var velocityDirection = hasDirection ? velocity / speed : Vector3.Zero;
         var spatialCandidates = new List<AiPursuitTargetCandidate>();
+        var spatialPointIds = new List<int>();
+        var laneEquivalentPointIds = new List<int>();
+        var rejections = new List<AiPursuitTargetRejection>();
 
         foreach (var source in _findNearest(position, maximumCandidates))
         {
-            if (!float.IsFinite(source.DistanceSquared)
-                || source.DistanceSquared < 0
-                || source.DistanceSquared > maximumDistanceSquared)
+            spatialPointIds.Add(source.PointId);
+            if (TryCreateCandidate(
+                    source,
+                    velocityDirection,
+                    hasDirection,
+                    maximumDistanceSquared,
+                    enforceMaximumDistance: true,
+                    out var candidate,
+                    out var rejection))
             {
-                continue;
+                spatialCandidates.Add(candidate);
             }
-
-            var alignment = 0.0f;
-            if (hasDirection)
+            else
             {
-                var forwardLength = source.Forward.Length();
-                if (forwardLength <= 0)
-                    continue;
-
-                alignment = Vector3.Dot(velocityDirection, source.Forward / forwardLength);
-                if (alignment < MinimumDirectionAlignment)
-                    continue;
+                rejections.Add(rejection);
             }
-
-            spatialCandidates.Add(new AiPursuitTargetCandidate(
-                source.PointId,
-                source.DistanceSquared,
-                alignment));
         }
 
         var orderedSpatialCandidates = spatialCandidates
@@ -101,38 +129,94 @@ public sealed class AiPursuitTargetLocator
         {
             foreach (var source in _findLaneEquivalents(spatialCandidate.PointId, position))
             {
-                if (candidates.ContainsKey(source.PointId)
-                    || !float.IsFinite(source.DistanceSquared)
-                    || source.DistanceSquared < 0)
-                {
+                if (candidates.ContainsKey(source.PointId))
                     continue;
-                }
 
-                var alignment = 0.0f;
-                if (hasDirection)
+                laneEquivalentPointIds.Add(source.PointId);
+                if (TryCreateCandidate(
+                        source,
+                        velocityDirection,
+                        hasDirection,
+                        maximumDistanceSquared,
+                        enforceMaximumDistance: false,
+                        out var candidate,
+                        out var rejection))
                 {
-                    var forwardLength = source.Forward.Length();
-                    if (forwardLength <= 0)
-                        continue;
-
-                    alignment = Vector3.Dot(velocityDirection, source.Forward / forwardLength);
-                    if (alignment < MinimumDirectionAlignment)
-                        continue;
+                    candidates.Add(source.PointId, candidate);
                 }
-
-                candidates.Add(
-                    source.PointId,
-                    new AiPursuitTargetCandidate(
-                        source.PointId,
-                        source.DistanceSquared,
-                        alignment));
+                else
+                {
+                    rejections.Add(rejection);
+                }
             }
         }
 
-        return candidates.Values
+        var orderedCandidates = candidates.Values
             .OrderBy(candidate => candidate.DistanceSquared)
             .ThenBy(candidate => candidate.PointId)
             .ToArray();
+        return new AiPursuitTargetLocationResult(
+            orderedCandidates,
+            new AiPursuitTargetLocationDiagnostics(
+                spatialPointIds,
+                laneEquivalentPointIds.Distinct().ToArray(),
+                rejections));
+    }
+
+    private static bool TryCreateCandidate(
+        AiPursuitTargetCandidateSource source,
+        Vector3 velocityDirection,
+        bool hasDirection,
+        float maximumDistanceSquared,
+        bool enforceMaximumDistance,
+        out AiPursuitTargetCandidate candidate,
+        out AiPursuitTargetRejection rejection)
+    {
+        candidate = default;
+        if (!float.IsFinite(source.DistanceSquared) || source.DistanceSquared < 0)
+        {
+            rejection = new AiPursuitTargetRejection(
+                source.PointId,
+                AiPursuitTargetRejectionReason.InvalidDistance);
+            return false;
+        }
+
+        if (enforceMaximumDistance && source.DistanceSquared > maximumDistanceSquared)
+        {
+            rejection = new AiPursuitTargetRejection(
+                source.PointId,
+                AiPursuitTargetRejectionReason.OutsideMaximumDistance);
+            return false;
+        }
+
+        var alignment = 0.0f;
+        if (hasDirection)
+        {
+            var forwardLength = source.Forward.Length();
+            if (forwardLength <= 0)
+            {
+                rejection = new AiPursuitTargetRejection(
+                    source.PointId,
+                    AiPursuitTargetRejectionReason.MissingForwardDirection);
+                return false;
+            }
+
+            alignment = Vector3.Dot(velocityDirection, source.Forward / forwardLength);
+            if (alignment < MinimumDirectionAlignment)
+            {
+                rejection = new AiPursuitTargetRejection(
+                    source.PointId,
+                    AiPursuitTargetRejectionReason.OppositeDirection);
+                return false;
+            }
+        }
+
+        candidate = new AiPursuitTargetCandidate(
+            source.PointId,
+            source.DistanceSquared,
+            alignment);
+        rejection = default;
+        return true;
     }
 
     private static IReadOnlyList<AiPursuitTargetCandidateSource> FindNearest(

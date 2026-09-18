@@ -175,7 +175,7 @@ public class AiRoutePlannerTests
     {
         var distanceLimited = CreatePlanner(new Dictionary<int, AiRouteEdge[]>
         {
-            [0] = [new(1, 60, null, null)],
+            [0] = [new(1, 60, 7, true)],
             [1] = [new(2, 60, null, null)],
             [2] = []
         });
@@ -198,6 +198,8 @@ public class AiRoutePlannerTests
         Assert.Multiple(() =>
         {
             Assert.That(distanceResult.Failure, Is.EqualTo(AiRouteSearchFailure.DistanceLimit));
+            Assert.That(distanceResult.MaximumExploredDistanceMeters, Is.EqualTo(60));
+            Assert.That(distanceResult.JunctionEdgesExamined, Is.EqualTo(1));
             Assert.That(unreachableResult.Failure, Is.EqualTo(AiRouteSearchFailure.Unreachable));
         });
     }

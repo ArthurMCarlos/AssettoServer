@@ -176,6 +176,10 @@ public class AiState
                     options.MaximumRouteDistanceMeters,
                     options.MaximumVisitedNodes),
                 options.RouteGraceMilliseconds));
+        var searchDiagnostics = AiPursuitControl.CreateSearchDiagnostics(
+            navigation,
+            CurrentSplinePointId,
+            previousNavigation?.TargetPointId);
 
         if (navigation.Status == AiPursuitNavigationStatus.NoRoute)
         {
@@ -183,7 +187,8 @@ public class AiState
             return new AiPursuitTrackingResult(
                 AiPursuitTrackingStatus.NoRoute,
                 null,
-                targetSpeed);
+                targetSpeed,
+                SearchDiagnostics: searchDiagnostics);
         }
 
         var desiredSpeed = previous?.TargetSessionId == target.SessionId
@@ -205,7 +210,8 @@ public class AiState
             return new AiPursuitTrackingResult(
                 AiPursuitTrackingStatus.RouteTemporarilyUnavailable,
                 null,
-                targetSpeed);
+                targetSpeed,
+                SearchDiagnostics: searchDiagnostics);
         }
 
         var diagnostics = AiPursuitControl.CreateRouteDiagnostics(
@@ -217,7 +223,8 @@ public class AiState
             AiPursuitTrackingStatus.Active,
             navigationState.Plan.DistanceMeters,
             targetSpeed,
-            diagnostics);
+            diagnostics,
+            searchDiagnostics);
     }
 
     public void SetPursuitDesiredSpeed(float metersPerSecond)

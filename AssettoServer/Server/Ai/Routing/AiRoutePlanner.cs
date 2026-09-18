@@ -70,6 +70,8 @@ public sealed class AiRoutePlanner
         queue.Enqueue(startPointId, 0);
         var visitedNodes = 0;
         var distanceLimited = false;
+        var maximumExploredDistanceMeters = 0.0f;
+        var junctionEdgesExamined = 0;
 
         while (queue.TryDequeue(out var pointId, out var queuedDistance))
         {
@@ -84,10 +86,15 @@ public sealed class AiRoutePlanner
                 return new AiRouteSearchResult(
                     null,
                     AiRouteSearchFailure.NodeLimit,
-                    visitedNodes);
+                    visitedNodes,
+                    maximumExploredDistanceMeters,
+                    junctionEdgesExamined);
             }
 
             visitedNodes++;
+            maximumExploredDistanceMeters = Math.Max(
+                maximumExploredDistanceMeters,
+                knownDistance);
 
             if (targetPointIds.Contains(pointId))
             {
@@ -99,11 +106,16 @@ public sealed class AiRoutePlanner
                         predecessors,
                         distances),
                     AiRouteSearchFailure.None,
-                    visitedNodes);
+                    visitedNodes,
+                    maximumExploredDistanceMeters,
+                    junctionEdgesExamined);
             }
 
             foreach (var edge in graph.GetEdges(pointId))
             {
+                if (edge.JunctionId.HasValue)
+                    junctionEdgesExamined++;
+
                 if (edge.LengthMeters < 0 || !float.IsFinite(edge.LengthMeters))
                     continue;
 
@@ -131,7 +143,9 @@ public sealed class AiRoutePlanner
             distanceLimited
                 ? AiRouteSearchFailure.DistanceLimit
                 : AiRouteSearchFailure.Unreachable,
-            visitedNodes);
+            visitedNodes,
+            maximumExploredDistanceMeters,
+            junctionEdgesExamined);
     }
 
     private static AiRoutePlan Reconstruct(

@@ -90,7 +90,10 @@ public class AiPursuitControlTests
             new AiPursuitRouteState(20, plan, 3, null),
             AiPursuitRouteUpdateKind.Recalculated,
             AiRouteSearchFailure.None,
-            12);
+            12,
+            new AiPursuitTargetLocationDiagnostics([], [], []),
+            30,
+            1);
 
         var diagnostics = AiPursuitControl.CreateRouteDiagnostics(
             navigation,
@@ -106,6 +109,43 @@ public class AiPursuitControlTests
             Assert.That(diagnostics.VisitedNodes, Is.EqualTo(12));
             Assert.That(diagnostics.JunctionDecisions,
                 Is.EqualTo(new[] { new AiPursuitJunctionDecision(7, true, 300) }));
+        });
+    }
+
+    [Test]
+    public void CreatesSearchDiagnosticsFromFailedNavigation()
+    {
+        var navigation = new AiPursuitNavigationResult(
+            AiPursuitNavigationStatus.NoRoute,
+            null,
+            null,
+            AiRouteSearchFailure.DistanceLimit,
+            1234,
+            new AiPursuitTargetLocationDiagnostics(
+                [227470, 57704],
+                [171048],
+                [new AiPursuitTargetRejection(
+                    265571,
+                    AiPursuitTargetRejectionReason.OppositeDirection)]),
+            MaximumExploredDistanceMeters: 19_999,
+            JunctionEdgesExamined: 2);
+
+        var diagnostics = AiPursuitControl.CreateSearchDiagnostics(
+            navigation,
+            policePointId: 171036,
+            previousTargetPointId: 171048);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(diagnostics.PolicePointId, Is.EqualTo(171036));
+            Assert.That(diagnostics.PreviousTargetPointId, Is.EqualTo(171048));
+            Assert.That(diagnostics.SelectedTargetPointId, Is.Null);
+            Assert.That(diagnostics.SpatialPointIds, Is.EqualTo(new[] { 227470, 57704 }));
+            Assert.That(diagnostics.LaneEquivalentPointIds, Is.EqualTo(new[] { 171048 }));
+            Assert.That(diagnostics.SearchFailure, Is.EqualTo(AiRouteSearchFailure.DistanceLimit));
+            Assert.That(diagnostics.VisitedNodes, Is.EqualTo(1234));
+            Assert.That(diagnostics.MaximumExploredDistanceMeters, Is.EqualTo(19_999));
+            Assert.That(diagnostics.JunctionEdgesExamined, Is.EqualTo(2));
         });
     }
 }

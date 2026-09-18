@@ -149,6 +149,10 @@ public class AiPursuitNavigatorTests
             Assert.That(temporary.Status,
                 Is.EqualTo(AiPursuitNavigationStatus.RouteTemporarilyUnavailable));
             Assert.That(temporary.State!.Plan, Is.SameAs(active.State!.Plan));
+            Assert.That(temporary.TargetLocationDiagnostics.SpatialPointIds,
+                Is.EqualTo(new[] { 9 }));
+            Assert.That(temporary.MaximumExploredDistanceMeters, Is.EqualTo(10));
+            Assert.That(temporary.JunctionEdgesExamined, Is.Zero);
             Assert.That(definitive.Status, Is.EqualTo(AiPursuitNavigationStatus.NoRoute));
             Assert.That(definitive.State, Is.Null);
         });

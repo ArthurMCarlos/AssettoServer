@@ -100,6 +100,47 @@ public class AiPursuitTargetLocatorTests
             Does.Contain(99));
     }
 
+    [Test]
+    public void ReportsSpatialLaneAndRejectedCandidates()
+    {
+        var locator = new AiPursuitTargetLocator(
+            (_, _) =>
+            [
+                new AiPursuitTargetCandidateSource(10, 1, Vector3.UnitX),
+                new AiPursuitTargetCandidateSource(20, 64, Vector3.UnitX),
+                new AiPursuitTargetCandidateSource(30, 4, -Vector3.UnitX)
+            ],
+            (pointId, _) => pointId == 10
+                ? [new AiPursuitTargetCandidateSource(99, 64, Vector3.UnitX)]
+                : []);
+
+        var result = locator.LocateCandidates(
+            Vector3.Zero,
+            Vector3.UnitX * 20,
+            maximumDistanceSquared: 49,
+            maximumCandidates: 16);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Candidates.Select(candidate => candidate.PointId),
+                Is.EqualTo(new[] { 10, 99 }));
+            Assert.That(result.Diagnostics.SpatialPointIds,
+                Is.EqualTo(new[] { 10, 20, 30 }));
+            Assert.That(result.Diagnostics.LaneEquivalentPointIds,
+                Is.EqualTo(new[] { 99 }));
+            Assert.That(result.Diagnostics.Rejections,
+                Is.EqualTo(new[]
+                {
+                    new AiPursuitTargetRejection(
+                        20,
+                        AiPursuitTargetRejectionReason.OutsideMaximumDistance),
+                    new AiPursuitTargetRejection(
+                        30,
+                        AiPursuitTargetRejectionReason.OppositeDirection)
+                }));
+        });
+    }
+
     private static AiPursuitTargetLocator CreateLocator(
         params AiPursuitTargetCandidateSource[] sources) =>
         new((_, _) => sources);

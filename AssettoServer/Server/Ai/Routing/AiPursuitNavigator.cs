@@ -39,26 +39,52 @@ public sealed record AiPursuitNavigationResult(
     AiPursuitRouteState? State,
     AiPursuitRouteUpdateKind? UpdateKind,
     AiRouteSearchFailure SearchFailure,
-    int VisitedNodes);
+    int VisitedNodes,
+    AiPursuitTargetLocationDiagnostics TargetLocationDiagnostics,
+    float MaximumExploredDistanceMeters,
+    int JunctionEdgesExamined);
 
 public sealed class AiPursuitNavigator
 {
     private readonly Func<int, IReadOnlySet<int>, AiRouteSearchLimits, AiRouteSearchResult> _tryPlan;
-    private readonly Func<Vector3, Vector3, float, int, IReadOnlyList<AiPursuitTargetCandidate>> _findCandidates;
+    private readonly Func<Vector3, Vector3, float, int, AiPursuitTargetLocationResult> _locateCandidates;
 
     public AiPursuitNavigator(
         AiRoutePlanner planner,
         AiPursuitTargetLocator targetLocator)
-        : this(planner.TryPlan, targetLocator.FindCandidates)
+        : this(planner.TryPlan, targetLocator.LocateCandidates)
     {
     }
 
     internal AiPursuitNavigator(
         Func<int, IReadOnlySet<int>, AiRouteSearchLimits, AiRouteSearchResult> tryPlan,
         Func<Vector3, Vector3, float, int, IReadOnlyList<AiPursuitTargetCandidate>> findCandidates)
+        : this(
+            tryPlan,
+            (position, velocity, maximumDistanceSquared, maximumCandidates) =>
+            {
+                var candidates = findCandidates(
+                    position,
+                    velocity,
+                    maximumDistanceSquared,
+                    maximumCandidates);
+                return new AiPursuitTargetLocationResult(
+                    candidates,
+                    new AiPursuitTargetLocationDiagnostics(
+                        candidates.Select(candidate => candidate.PointId).ToArray(),
+                        [],
+                        []));
+            })
+    {
+    }
+
+    internal AiPursuitNavigator(
+        Func<int, IReadOnlySet<int>, AiRouteSearchLimits, AiRouteSearchResult> tryPlan,
+        Func<Vector3, Vector3, float, int, AiPursuitTargetLocationResult> locateCandidates)
     {
         _tryPlan = tryPlan ?? throw new ArgumentNullException(nameof(tryPlan));
-        _findCandidates = findCandidates ?? throw new ArgumentNullException(nameof(findCandidates));
+        _locateCandidates = locateCandidates
+            ?? throw new ArgumentNullException(nameof(locateCandidates));
     }
 
     public AiPursuitNavigationResult Update(
@@ -72,12 +98,12 @@ public sealed class AiPursuitNavigator
     {
         Validate(options);
 
-        var candidates = _findCandidates(
+        var location = _locateCandidates(
             targetPosition,
             targetVelocity,
             maximumTargetDistanceSquared,
             options.MaximumTargetCandidates);
-        var targetPointIds = candidates
+        var targetPointIds = location.Candidates
             .Select(candidate => candidate.PointId)
             .ToHashSet();
 
@@ -88,6 +114,9 @@ public sealed class AiPursuitNavigator
                 nowMilliseconds,
                 options.RouteGraceMilliseconds,
                 AiRouteSearchFailure.Unreachable,
+                0,
+                location.Diagnostics,
+                0,
                 0);
         }
 
@@ -96,7 +125,11 @@ public sealed class AiPursuitNavigator
         {
             if (targetPointIds.Contains(previous.TargetPointId))
             {
-                return ActiveFromCache(previous, remainingPlan, previous.TargetPointId);
+                return ActiveFromCache(
+                    previous,
+                    remainingPlan,
+                    previous.TargetPointId,
+                    location.Diagnostics);
             }
 
             var extensionLimits = new AiRouteSearchLimits(
@@ -116,7 +149,8 @@ public sealed class AiPursuitNavigator
                     previous.FirstFailureMilliseconds.HasValue
                         ? AiPursuitRouteUpdateKind.Recovered
                         : AiPursuitRouteUpdateKind.Extended,
-                    extension.VisitedNodes);
+                    extension,
+                    location.Diagnostics);
             }
         }
 
@@ -132,7 +166,8 @@ public sealed class AiPursuitNavigator
                     : previous.FirstFailureMilliseconds.HasValue
                         ? AiPursuitRouteUpdateKind.Recovered
                         : AiPursuitRouteUpdateKind.Recalculated,
-                route.VisitedNodes);
+                route,
+                location.Diagnostics);
         }
 
         return HandleFailure(
@@ -140,13 +175,17 @@ public sealed class AiPursuitNavigator
             nowMilliseconds,
             options.RouteGraceMilliseconds,
             route.Failure,
-            route.VisitedNodes);
+            route.VisitedNodes,
+            location.Diagnostics,
+            route.MaximumExploredDistanceMeters,
+            route.JunctionEdgesExamined);
     }
 
     private static AiPursuitNavigationResult ActiveFromCache(
         AiPursuitRouteState previous,
         AiRoutePlan remainingPlan,
-        int targetPointId)
+        int targetPointId,
+        AiPursuitTargetLocationDiagnostics targetLocationDiagnostics)
     {
         var recovered = previous.FirstFailureMilliseconds.HasValue;
         var state = previous with
@@ -161,6 +200,9 @@ public sealed class AiPursuitNavigator
             state,
             recovered ? AiPursuitRouteUpdateKind.Recovered : AiPursuitRouteUpdateKind.Reused,
             AiRouteSearchFailure.None,
+            0,
+            targetLocationDiagnostics,
+            0,
             0);
     }
 
@@ -169,7 +211,8 @@ public sealed class AiPursuitNavigator
         AiRoutePlan plan,
         int targetPointId,
         AiPursuitRouteUpdateKind updateKind,
-        int visitedNodes)
+        AiRouteSearchResult search,
+        AiPursuitTargetLocationDiagnostics targetLocationDiagnostics)
     {
         var state = new AiPursuitRouteState(
             targetPointId,
@@ -181,7 +224,10 @@ public sealed class AiPursuitNavigator
             state,
             updateKind,
             AiRouteSearchFailure.None,
-            visitedNodes);
+            search.VisitedNodes,
+            targetLocationDiagnostics,
+            search.MaximumExploredDistanceMeters,
+            search.JunctionEdgesExamined);
     }
 
     private static AiPursuitNavigationResult HandleFailure(
@@ -189,7 +235,10 @@ public sealed class AiPursuitNavigator
         long nowMilliseconds,
         int graceMilliseconds,
         AiRouteSearchFailure failure,
-        int visitedNodes)
+        int visitedNodes,
+        AiPursuitTargetLocationDiagnostics targetLocationDiagnostics,
+        float maximumExploredDistanceMeters,
+        int junctionEdgesExamined)
     {
         if (previous != null)
         {
@@ -201,7 +250,10 @@ public sealed class AiPursuitNavigator
                     previous with { FirstFailureMilliseconds = firstFailure },
                     null,
                     failure,
-                    visitedNodes);
+                    visitedNodes,
+                    targetLocationDiagnostics,
+                    maximumExploredDistanceMeters,
+                    junctionEdgesExamined);
             }
         }
 
@@ -210,7 +262,10 @@ public sealed class AiPursuitNavigator
             null,
             null,
             failure,
-            visitedNodes);
+            visitedNodes,
+            targetLocationDiagnostics,
+            maximumExploredDistanceMeters,
+            junctionEdgesExamined);
     }
 
     private static bool TryTrimPlan(

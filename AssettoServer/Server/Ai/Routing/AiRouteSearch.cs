@@ -27,4 +27,6 @@ public sealed record AiRoutePlan(
 public sealed record AiRouteSearchResult(
     AiRoutePlan? Plan,
     AiRouteSearchFailure Failure,
-    int VisitedNodes);
+    int VisitedNodes,
+    float MaximumExploredDistanceMeters = 0,
+    int JunctionEdgesExamined = 0);
