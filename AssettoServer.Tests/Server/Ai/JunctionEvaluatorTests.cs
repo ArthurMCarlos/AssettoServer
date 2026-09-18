@@ -41,4 +41,19 @@ public class JunctionEvaluatorTests
 
         Assert.That(evaluator.WillTakeJunction(7), Is.True);
     }
+
+    [Test]
+    public void ReplacingExplicitDecisionsRestoresFallbackForRemovedJunction()
+    {
+        var evaluator = new JunctionEvaluator(_ => 0.0f, savesState: true);
+        evaluator.SetExplicitDecisions(new Dictionary<int, bool> { [7] = true });
+
+        evaluator.SetExplicitDecisions(new Dictionary<int, bool> { [8] = true });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(evaluator.WillTakeJunction(7), Is.False);
+            Assert.That(evaluator.WillTakeJunction(8), Is.True);
+        });
+    }
 }

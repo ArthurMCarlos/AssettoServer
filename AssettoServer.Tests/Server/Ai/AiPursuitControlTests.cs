@@ -1,4 +1,5 @@
 using AssettoServer.Server.Ai;
+using AssettoServer.Server.Ai.Routing;
 
 namespace AssettoServer.Tests.Server.Ai;
 
@@ -62,5 +63,49 @@ public class AiPursuitControlTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             AiPursuitControl.ValidateMaximumDistance(maximumDistance));
+    }
+
+    [Test]
+    public void RejectsInvalidTrackingRouteBudget()
+    {
+        var options = new AiPursuitTrackingOptions(
+            MaximumSpatialDistanceMeters: 1500,
+            MaximumRouteDistanceMeters: 20_000,
+            MaximumVisitedNodes: 0,
+            RouteGraceMilliseconds: 2000);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AiPursuitControl.ValidateTrackingOptions(options));
+    }
+
+    [Test]
+    public void CreatesDiagnosticsWithRealJunctionDestination()
+    {
+        var plan = new AiRoutePlan(
+            30,
+            [new AiRouteNode(10, 0), new AiRouteNode(20, 30)],
+            new Dictionary<int, bool> { [7] = true });
+        var navigation = new AiPursuitNavigationResult(
+            AiPursuitNavigationStatus.Active,
+            new AiPursuitRouteState(20, plan, 3, null),
+            AiPursuitRouteUpdateKind.Recalculated,
+            AiRouteSearchFailure.None,
+            12);
+
+        var diagnostics = AiPursuitControl.CreateRouteDiagnostics(
+            navigation,
+            policePointId: 10,
+            junctionId => junctionId == 7 ? 300 : -1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(diagnostics.Revision, Is.EqualTo(3));
+            Assert.That(diagnostics.PolicePointId, Is.EqualTo(10));
+            Assert.That(diagnostics.TargetPointId, Is.EqualTo(20));
+            Assert.That(diagnostics.RouteDistanceMeters, Is.EqualTo(30));
+            Assert.That(diagnostics.VisitedNodes, Is.EqualTo(12));
+            Assert.That(diagnostics.JunctionDecisions,
+                Is.EqualTo(new[] { new AiPursuitJunctionDecision(7, true, 300) }));
+        });
     }
 }

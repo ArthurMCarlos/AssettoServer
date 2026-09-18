@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using AssettoServer.Server.Ai.Routing;
 
@@ -13,16 +15,37 @@ public enum AiPursuitTrackingStatus
     NoRoute
 }
 
+public sealed record AiPursuitTrackingOptions(
+    float MaximumSpatialDistanceMeters,
+    float MaximumRouteDistanceMeters,
+    int MaximumVisitedNodes,
+    int RouteGraceMilliseconds);
+
+public sealed record AiPursuitJunctionDecision(
+    int JunctionId,
+    bool TakeBranch,
+    int EndPointId);
+
+public sealed record AiPursuitRouteDiagnostics(
+    long Revision,
+    AiPursuitRouteUpdateKind UpdateKind,
+    int PolicePointId,
+    int TargetPointId,
+    float RouteDistanceMeters,
+    int VisitedNodes,
+    IReadOnlyList<AiPursuitJunctionDecision> JunctionDecisions);
+
 public sealed record AiPursuitTrackingResult(
     AiPursuitTrackingStatus Status,
     float? RouteDistanceMeters,
-    float TargetSpeedMetersPerSecond);
+    float TargetSpeedMetersPerSecond,
+    AiPursuitRouteDiagnostics? RouteDiagnostics = null);
 
 internal sealed record AiPursuitSnapshot(
     byte TargetSessionId,
     Vector3 TargetPosition,
-    float MaxDistanceMeters,
-    AiRoutePlan Route,
+    AiPursuitTrackingOptions Options,
+    AiPursuitRouteState NavigationState,
     float? DesiredSpeedMetersPerSecond);
 
 public static class AiPursuitControl
@@ -43,6 +66,37 @@ public static class AiPursuitControl
     public static float ApplySafetyLimit(float requestedSpeed, float safetyLimit) =>
         Math.Min(requestedSpeed, safetyLimit);
 
+    public static AiPursuitRouteDiagnostics CreateRouteDiagnostics(
+        AiPursuitNavigationResult navigation,
+        int policePointId,
+        Func<int, int> getJunctionEndPoint)
+    {
+        ArgumentNullException.ThrowIfNull(navigation);
+        ArgumentNullException.ThrowIfNull(getJunctionEndPoint);
+        if (navigation.Status != AiPursuitNavigationStatus.Active
+            || navigation.State == null
+            || !navigation.UpdateKind.HasValue)
+        {
+            throw new ArgumentException("Active navigation result required", nameof(navigation));
+        }
+
+        var decisions = navigation.State.Plan.JunctionDecisions
+            .OrderBy(decision => decision.Key)
+            .Select(decision => new AiPursuitJunctionDecision(
+                decision.Key,
+                decision.Value,
+                getJunctionEndPoint(decision.Key)))
+            .ToArray();
+        return new AiPursuitRouteDiagnostics(
+            navigation.State.Revision,
+            navigation.UpdateKind.Value,
+            policePointId,
+            navigation.State.TargetPointId,
+            navigation.State.Plan.DistanceMeters,
+            navigation.VisitedNodes,
+            decisions);
+    }
+
     public static void ValidateDesiredSpeed(float speed)
     {
         if (!float.IsFinite(speed) || speed < 0)
@@ -53,5 +107,20 @@ public static class AiPursuitControl
     {
         if (!float.IsFinite(maximumDistanceMeters) || maximumDistanceMeters <= 0)
             throw new ArgumentOutOfRangeException(nameof(maximumDistanceMeters));
+    }
+
+    public static void ValidateTrackingOptions(AiPursuitTrackingOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ValidateMaximumDistance(options.MaximumSpatialDistanceMeters);
+        if (!float.IsFinite(options.MaximumRouteDistanceMeters)
+            || options.MaximumRouteDistanceMeters <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options.MaximumRouteDistanceMeters));
+        }
+        if (options.MaximumVisitedNodes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options.MaximumVisitedNodes));
+        if (options.RouteGraceMilliseconds < 0)
+            throw new ArgumentOutOfRangeException(nameof(options.RouteGraceMilliseconds));
     }
 }
