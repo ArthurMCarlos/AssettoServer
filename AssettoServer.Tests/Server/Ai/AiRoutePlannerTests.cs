@@ -123,7 +123,97 @@ public class AiRoutePlannerTests
         Assert.That(buildCount, Is.EqualTo(1));
     }
 
+    [Test]
+    public void ReturnsOrderedCorridorAcrossMultipleJunctions()
+    {
+        var planner = CreatePlanner(new Dictionary<int, AiRouteEdge[]>
+        {
+            [0] = [new(1, 10, 3, true)],
+            [1] = [new(2, 20, 4, false)],
+            [2] = [new(5, 30, null, null)],
+            [5] = []
+        });
+
+        var result = planner.TryPlan(
+            0,
+            new HashSet<int> { 5 },
+            new AiRouteSearchLimits(20_000, 50_000));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failure, Is.EqualTo(AiRouteSearchFailure.None));
+            Assert.That(result.Plan!.Nodes.Select(node => node.PointId),
+                Is.EqualTo(new[] { 0, 1, 2, 5 }));
+            Assert.That(result.Plan.Nodes.Select(node => node.DistanceFromStartMeters),
+                Is.EqualTo(new[] { 0, 10, 30, 60 }));
+            Assert.That(result.Plan.DistanceMeters, Is.EqualTo(60));
+            Assert.That(result.Plan.JunctionDecisions,
+                Is.EqualTo(new Dictionary<int, bool> { [3] = true, [4] = false }));
+        });
+    }
+
+    [Test]
+    public void StopsAtVisitedNodeBudget()
+    {
+        var planner = CreateLinearPlanner(pointCount: 10);
+
+        var result = planner.TryPlan(
+            0,
+            new HashSet<int> { 9 },
+            new AiRouteSearchLimits(20_000, 3));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Plan, Is.Null);
+            Assert.That(result.Failure, Is.EqualTo(AiRouteSearchFailure.NodeLimit));
+            Assert.That(result.VisitedNodes, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void DistinguishesDistanceLimitFromUnreachableTarget()
+    {
+        var distanceLimited = CreatePlanner(new Dictionary<int, AiRouteEdge[]>
+        {
+            [0] = [new(1, 60, null, null)],
+            [1] = [new(2, 60, null, null)],
+            [2] = []
+        });
+        var disconnected = CreatePlanner(new Dictionary<int, AiRouteEdge[]>
+        {
+            [0] = [new(1, 10, null, null)],
+            [1] = [],
+            [2] = []
+        });
+
+        var distanceResult = distanceLimited.TryPlan(
+            0,
+            new HashSet<int> { 2 },
+            new AiRouteSearchLimits(100, 50));
+        var unreachableResult = disconnected.TryPlan(
+            0,
+            new HashSet<int> { 2 },
+            new AiRouteSearchLimits(100, 50));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(distanceResult.Failure, Is.EqualTo(AiRouteSearchFailure.DistanceLimit));
+            Assert.That(unreachableResult.Failure, Is.EqualTo(AiRouteSearchFailure.Unreachable));
+        });
+    }
+
     private static AiRoutePlanner CreatePlanner(
         IReadOnlyDictionary<int, AiRouteEdge[]> edges) =>
         new(new AiRouteGraph(edges));
+
+    private static AiRoutePlanner CreateLinearPlanner(int pointCount)
+    {
+        var edges = Enumerable.Range(0, pointCount)
+            .ToDictionary(
+                pointId => pointId,
+                pointId => pointId + 1 < pointCount
+                    ? new[] { new AiRouteEdge(pointId + 1, 1, null, null) }
+                    : Array.Empty<AiRouteEdge>());
+        return CreatePlanner(edges);
+    }
 }
