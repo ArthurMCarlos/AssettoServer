@@ -248,8 +248,12 @@ public class AiBehavior : CriticalBackgroundService, IAssettoServerAutostart
 
         foreach (var dist in _aiMinDistanceToPlayer)
         {
-            if (dist.Value > _configuration.Extra.AiParams.PlayerRadiusSquared
-                && _sessionManager.ServerTimeMilliseconds > dist.Key.SpawnProtectionEnds)
+            if (AiSpatialLifecycle.ShouldQueueForReposition(
+                    dist.Value,
+                    _configuration.Extra.AiParams.PlayerRadiusSquared,
+                    _sessionManager.ServerTimeMilliseconds,
+                    dist.Key.SpawnProtectionEnds,
+                    dist.Key.ShouldRetainPursuit))
             {
                 _uninitializedAiStates.Add(dist.Key);
             }
