@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Numerics;
 using System.Text;
+using AssettoServer.Server.Ai;
 using AssettoServer.Server.Ai.Configuration;
 using AssettoServer.Server.Ai.Routing;
 using AssettoServer.Server.Ai.Splines;
@@ -75,6 +76,125 @@ public class RealSplineTransitionIntegrationTests
             Assert.That(result.State.Plan.JunctionDecisions, Is.Empty);
         });
     }
+
+    [Test]
+    [Explicit("Requires POLICE_CHASE_FAST_LANE_AIP pointing to the real Shutoko package")]
+    public void RealShutokoPackageSelectsImmediateLaneForForwardJunctionRoute()
+    {
+        var sourcePath = Environment.GetEnvironmentVariable("POLICE_CHASE_FAST_LANE_AIP");
+        Assert.That(sourcePath, Is.Not.Null.And.Not.Empty);
+        Assert.That(File.Exists(sourcePath), Is.True, sourcePath);
+
+        using var fixture = AipFixture.FromExisting(sourcePath!);
+        using var spline = fixture.Load("shuto_revival_project_beta_ptb");
+        var planner = new AiRoutePlanner(spline);
+        var selector = new AiPursuitLaneSelector(spline, planner);
+        var limits = new AiRouteSearchLimits(20_000, 50_000);
+        var scenario = FindLaneChangeScenario(spline, planner, limits);
+
+        Assert.That(scenario, Is.Not.Null,
+            "Expected at least one real junction reachable only through an immediate adjacent lane");
+
+        var result = selector.Select(
+            scenario!.SourcePointId,
+            new HashSet<int> { scenario.TargetPointId },
+            limits,
+            maneuverDistanceMeters: 60);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Change));
+            Assert.That(result.Selection!.ToPointId, Is.EqualTo(scenario.DestinationPointId));
+            Assert.That(result.Selection.DistanceToDecisionMeters, Is.GreaterThanOrEqualTo(60));
+            Assert.That(result.Selection.DestinationPlan.JunctionDecisions,
+                Contains.Key(scenario.JunctionId));
+            Assert.That(planner.TryPlan(
+                scenario.SourcePointId,
+                new HashSet<int> { scenario.TargetPointId },
+                limits).Plan, Is.Null,
+                "The route graph must remain forward-only without lateral edges");
+
+            var source = spline.Points[scenario.SourcePointId].Position;
+            var destination = spline.Points[scenario.DestinationPointId].Position;
+            var midpoint = AiLaneChangeTrajectory.Blend(
+                new AiSplinePose(source, spline.Operations.GetForwardVector(scenario.SourcePointId)),
+                new AiSplinePose(destination, spline.Operations.GetForwardVector(scenario.DestinationPointId)),
+                0.5f,
+                60).Position;
+            Assert.That(Vector3.Distance(midpoint, (source + destination) / 2),
+                Is.LessThan(0.01f));
+        });
+    }
+
+    private static LaneChangeScenario? FindLaneChangeScenario(
+        AiSpline spline,
+        AiRoutePlanner planner,
+        AiRouteSearchLimits limits)
+    {
+        foreach (ref readonly var junction in spline.Junctions)
+        {
+            var targetPointId = Advance(spline, junction.EndPointId, 150);
+            var destinationPointId = junction.StartPointId;
+            var distanceBeforeDecision = 0.0f;
+
+            while (destinationPointId >= 0 && distanceBeforeDecision <= 250)
+            {
+                ref readonly var destination = ref spline.Points[destinationPointId];
+                if (distanceBeforeDecision >= 60)
+                {
+                    foreach (var sourcePointId in new[] { destination.LeftId, destination.RightId })
+                    {
+                        if (sourcePointId < 0
+                            || !spline.Operations.IsSameDirection(sourcePointId, destinationPointId))
+                        {
+                            continue;
+                        }
+
+                        var targetIds = new HashSet<int> { targetPointId };
+                        if (planner.TryPlan(destinationPointId, targetIds, limits).Plan != null
+                            && planner.TryPlan(sourcePointId, targetIds, limits).Plan == null)
+                        {
+                            return new LaneChangeScenario(
+                                sourcePointId,
+                                destinationPointId,
+                                targetPointId,
+                                junction.Id);
+                        }
+                    }
+                }
+
+                if (destination.PreviousId < 0)
+                    break;
+                distanceBeforeDecision += Vector3.Distance(
+                    destination.Position,
+                    spline.Points[destination.PreviousId].Position);
+                destinationPointId = destination.PreviousId;
+            }
+        }
+
+        return null;
+    }
+
+    private static int Advance(AiSpline spline, int pointId, float distanceMeters)
+    {
+        var travelled = 0.0f;
+        while (pointId >= 0 && travelled < distanceMeters)
+        {
+            ref readonly var point = ref spline.Points[pointId];
+            if (point.NextId < 0)
+                break;
+            travelled += Vector3.Distance(point.Position, spline.Points[point.NextId].Position);
+            pointId = point.NextId;
+        }
+
+        return pointId;
+    }
+
+    private sealed record LaneChangeScenario(
+        int SourcePointId,
+        int DestinationPointId,
+        int TargetPointId,
+        int JunctionId);
 
     private sealed class AipFixture : IDisposable
     {
