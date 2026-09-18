@@ -15,11 +15,17 @@ public enum AiPursuitTrackingStatus
     NoRoute
 }
 
+public sealed record AiPursuitLaneChangeOptions(
+    bool Enabled,
+    float DistanceMeters,
+    int CooldownMilliseconds);
+
 public sealed record AiPursuitTrackingOptions(
     float MaximumSpatialDistanceMeters,
     float MaximumRouteDistanceMeters,
     int MaximumVisitedNodes,
-    int RouteGraceMilliseconds);
+    int RouteGraceMilliseconds,
+    AiPursuitLaneChangeOptions? LaneChange = null);
 
 public sealed record AiPursuitJunctionDecision(
     int JunctionId,
@@ -52,7 +58,18 @@ public sealed record AiPursuitTrackingResult(
     float? RouteDistanceMeters,
     float TargetSpeedMetersPerSecond,
     AiPursuitRouteDiagnostics? RouteDiagnostics = null,
-    AiPursuitSearchDiagnostics? SearchDiagnostics = null);
+    AiPursuitSearchDiagnostics? SearchDiagnostics = null,
+    AiPursuitLaneChangeDiagnostics? LaneChangeDiagnostics = null);
+
+public sealed record AiPursuitLaneChangeDiagnostics(
+    long Revision,
+    AiPursuitLaneChangeEventKind EventKind,
+    int FromPointId,
+    int ToPointId,
+    AiLaneChangeDirection Direction,
+    long RouteRevision,
+    float? DistanceToDecisionMeters,
+    string? BlockingReason);
 
 internal sealed record AiPursuitSnapshot(
     byte TargetSessionId,
@@ -157,5 +174,15 @@ public static class AiPursuitControl
             throw new ArgumentOutOfRangeException(nameof(options.MaximumVisitedNodes));
         if (options.RouteGraceMilliseconds < 0)
             throw new ArgumentOutOfRangeException(nameof(options.RouteGraceMilliseconds));
+        if (options.LaneChange is { Enabled: true } laneChange)
+        {
+            if (!float.IsFinite(laneChange.DistanceMeters)
+                || laneChange.DistanceMeters <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(laneChange.DistanceMeters));
+            }
+            if (laneChange.CooldownMilliseconds < 0)
+                throw new ArgumentOutOfRangeException(nameof(laneChange.CooldownMilliseconds));
+        }
     }
 }

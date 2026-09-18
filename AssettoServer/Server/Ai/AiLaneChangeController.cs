@@ -100,6 +100,23 @@ public sealed class AiLaneChangeController
         }
     }
 
+    public void RefreshWaiting(
+        AiPursuitLaneSelection selection,
+        AiSplineCursor source,
+        AiSplineCursor destination,
+        long routeRevision)
+    {
+        if (Phase != AiLaneChangePhase.WaitingForGap)
+            return;
+        var directionChanged = _selection?.Direction != selection.Direction;
+        _selection = selection;
+        _source = source;
+        _destination = destination;
+        if (directionChanged)
+            Publish(AiPursuitLaneChangeEventKind.RouteRevised, routeRevision, null);
+    }
+
+
     public bool TryMove(
         float distanceMeters,
         long nowMilliseconds,

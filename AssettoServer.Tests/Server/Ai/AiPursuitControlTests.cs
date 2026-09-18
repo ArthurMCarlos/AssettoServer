@@ -6,6 +6,20 @@ namespace AssettoServer.Tests.Server.Ai;
 [TestFixture]
 public class AiPursuitControlTests
 {
+    [Test]
+    public void RejectsInvalidLaneChangeDistance()
+    {
+        var options = new AiPursuitTrackingOptions(
+            1500,
+            20_000,
+            50_000,
+            2000,
+            new AiPursuitLaneChangeOptions(true, 0, 3000));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AiPursuitControl.ValidateTrackingOptions(options));
+    }
+
     [TestCase(1499, 1500, true)]
     [TestCase(1500, 1500, true)]
     [TestCase(1501, 1500, false)]

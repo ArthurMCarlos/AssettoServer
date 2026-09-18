@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Numerics;
 using System.Threading;
 using AssettoServer.Server.Ai.Routing;
@@ -72,6 +73,8 @@ public class AiState
     private readonly AiSpline _spline;
     private readonly JunctionEvaluator _junctionEvaluator;
     private readonly AiPursuitNavigator _pursuitNavigator;
+    private readonly AiPursuitLaneSelector _laneSelector;
+    private AiLaneChangeController? _laneChangeController;
     private AiPursuitSnapshot? _pursuit;
 
     private static readonly List<Color> CarColors =
@@ -105,9 +108,11 @@ public class AiState
         _entryCarManager = entryCarManager;
         _spline = spline;
         _junctionEvaluator = new JunctionEvaluator(spline);
+        var routePlanner = new AiRoutePlanner(spline);
         _pursuitNavigator = new AiPursuitNavigator(
-            new AiRoutePlanner(spline),
+            routePlanner,
             new AiPursuitTargetLocator(spline));
+        _laneSelector = new AiPursuitLaneSelector(spline, routePlanner);
 
         _lastTick = _sessionManager.ServerTimeMilliseconds;
     }
@@ -176,6 +181,18 @@ public class AiState
                     options.MaximumRouteDistanceMeters,
                     options.MaximumVisitedNodes),
                 options.RouteGraceMilliseconds));
+        if (navigation.Status != AiPursuitNavigationStatus.Active
+            && options.LaneChange is { Enabled: true } laneChange
+            && navigation.TargetPointIds.Count > 0)
+        {
+            navigation = TryPrepareLaneChange(
+                navigation,
+                previousNavigation,
+                laneChange,
+                new AiRouteSearchLimits(
+                    options.MaximumRouteDistanceMeters,
+                    options.MaximumVisitedNodes));
+        }
         var searchDiagnostics = AiPursuitControl.CreateSearchDiagnostics(
             navigation,
             CurrentSplinePointId,
@@ -224,7 +241,107 @@ public class AiState
             navigationState.Plan.DistanceMeters,
             targetSpeed,
             diagnostics,
-            searchDiagnostics);
+            searchDiagnostics,
+            CreateLaneChangeDiagnostics());
+    }
+
+    private AiPursuitNavigationResult TryPrepareLaneChange(
+        AiPursuitNavigationResult failedNavigation,
+        AiPursuitRouteState? previousNavigation,
+        AiPursuitLaneChangeOptions options,
+        AiRouteSearchLimits limits)
+    {
+        var targetPointIds = failedNavigation.TargetPointIds.ToHashSet();
+        var laneResult = _laneSelector.Select(
+            CurrentSplinePointId,
+            targetPointIds,
+            limits,
+            options.DistanceMeters);
+        if (laneResult.Kind != AiPursuitLaneSelectionKind.Change
+            || laneResult.Selection == null)
+        {
+            return failedNavigation;
+        }
+
+        _laneChangeController ??= new AiLaneChangeController(
+            options.DistanceMeters,
+            options.CooldownMilliseconds);
+        var selection = laneResult.Selection;
+        var sourceCursor = CreateSplineCursor(
+            CurrentSplinePointId,
+            _currentVecProgress);
+        var destinationLength = GetSegmentLength(selection.ToPointId);
+        var destinationProgress = _currentVecLength > 0
+            ? destinationLength * (_currentVecProgress / _currentVecLength)
+            : 0;
+        var destinationCursor = CreateSplineCursor(
+            selection.ToPointId,
+            destinationProgress);
+        var now = _sessionManager.ServerTimeMilliseconds;
+        var previousStartsAtDestination = previousNavigation?.Plan.Nodes.Count > 0
+                                          && previousNavigation.Plan.Nodes[0].PointId
+                                          == selection.ToPointId;
+        var revision = previousStartsAtDestination
+            ? previousNavigation!.Revision
+            : (previousNavigation?.Revision ?? 0) + 1;
+
+        if (_laneChangeController.Phase == AiLaneChangePhase.WaitingForGap)
+        {
+            _laneChangeController.RefreshWaiting(
+                selection,
+                sourceCursor,
+                destinationCursor,
+                revision);
+        }
+        else if (_laneChangeController.Phase != AiLaneChangePhase.Changing
+                 && !_laneChangeController.Request(
+                     selection,
+                     sourceCursor,
+                     destinationCursor,
+                     now,
+                     revision))
+        {
+            return failedNavigation;
+        }
+
+        UpdateLaneChangeSafety();
+        var routeState = previousStartsAtDestination
+            ? previousNavigation! with { FirstFailureMilliseconds = null }
+            : new AiPursuitRouteState(
+                selection.DestinationPlan.Nodes[^1].PointId,
+                selection.DestinationPlan,
+                revision,
+                null);
+        return new AiPursuitNavigationResult(
+            AiPursuitNavigationStatus.Active,
+            routeState,
+            previousStartsAtDestination
+                ? AiPursuitRouteUpdateKind.Reused
+                : AiPursuitRouteUpdateKind.Recalculated,
+            AiRouteSearchFailure.None,
+            failedNavigation.VisitedNodes,
+            failedNavigation.TargetLocationDiagnostics,
+            failedNavigation.MaximumExploredDistanceMeters,
+            failedNavigation.JunctionEdgesExamined)
+        {
+            TargetPointIds = failedNavigation.TargetPointIds
+        };
+    }
+
+    private AiPursuitLaneChangeDiagnostics? CreateLaneChangeDiagnostics()
+    {
+        var laneEvent = _laneChangeController?.Event;
+        return laneEvent == null
+            ? null
+            : new AiPursuitLaneChangeDiagnostics(
+                laneEvent.Revision,
+                laneEvent.Kind,
+                laneEvent.FromPointId,
+                laneEvent.ToPointId,
+                laneEvent.Direction,
+                laneEvent.RouteRevision,
+                laneEvent.DistanceToDecisionMeters,
+                laneEvent.SafetyStatus?.ToString());
     }
 
     public void SetPursuitDesiredSpeed(float metersPerSecond)
@@ -250,6 +367,94 @@ public class AiState
     {
         Interlocked.Exchange(ref _pursuit, null);
         _junctionEvaluator.SetExplicitDecisions(null);
+        _laneChangeController?.Reset();
+    }
+
+    private AiSplineCursor CreateSplineCursor(int pointId, float progress) =>
+        new(
+            pointId,
+            progress,
+            point => _junctionEvaluator.TryNext(point, out var next) ? next : null,
+            GetSegmentLength,
+            EvaluateSplinePose);
+
+    private float GetSegmentLength(int pointId)
+    {
+        return _junctionEvaluator.TryNext(pointId, out var next)
+            ? Vector3.Distance(_spline.Points[pointId].Position, _spline.Points[next].Position)
+            : 0;
+    }
+
+    private AiSplinePose EvaluateSplinePose(int pointId, float progress)
+    {
+        if (!_junctionEvaluator.TryNext(pointId, out var nextPointId))
+            return new AiSplinePose(_spline.Points[pointId].Position, Vector3.Zero);
+        var points = _spline.Points;
+        var length = Vector3.Distance(points[pointId].Position, points[nextPointId].Position);
+        var startTangent = _junctionEvaluator.TryPrevious(pointId, out var previousPointId)
+            ? (points[nextPointId].Position - points[previousPointId].Position) * 0.5f
+            : (points[nextPointId].Position - points[pointId].Position) * 0.5f;
+        var endTangent = _junctionEvaluator.TryNext(pointId, out var nextNextPointId, 2)
+            ? (points[nextNextPointId].Position - points[pointId].Position) * 0.5f
+            : (points[nextPointId].Position - points[pointId].Position) * 0.5f;
+        var pose = CatmullRom.Evaluate(
+            points[pointId].Position,
+            points[nextPointId].Position,
+            startTangent,
+            endTangent,
+            length > 0 ? progress / length : 0);
+        return new AiSplinePose(pose.Position, pose.Tangent);
+    }
+
+    private AiLaneChangeSafetyStatus UpdateLaneChangeSafety()
+    {
+        if (_laneChangeController?.Event == null
+            || _laneChangeController.Phase is AiLaneChangePhase.None
+                or AiLaneChangePhase.Cooldown)
+        {
+            return AiLaneChangeSafetyStatus.Safe;
+        }
+
+        var obstacles = new List<AiLaneChangeObstacle>();
+        foreach (var car in _entryCarManager.EntryCars)
+        {
+            if (car.AiControlled)
+            {
+                var states = new List<AiState>();
+                car.GetInitializedStates(states);
+                foreach (var state in states)
+                {
+                    if (!ReferenceEquals(state, this))
+                    {
+                        obstacles.Add(new AiLaneChangeObstacle(
+                            state.Status.Position,
+                            state.Status.Velocity,
+                            state.EntryCar.VehicleLengthPreMeters
+                            + state.EntryCar.VehicleLengthPostMeters));
+                    }
+                }
+            }
+            else if (car.Client?.HasSentFirstUpdate == true)
+            {
+                obstacles.Add(new AiLaneChangeObstacle(
+                    car.Status.Position,
+                    car.Status.Velocity,
+                    car.VehicleLengthPreMeters + car.VehicleLengthPostMeters));
+            }
+        }
+
+        var destinationPointId = _laneChangeController.Event.ToPointId;
+        var result = AiLaneChangeSafety.Evaluate(new AiLaneChangeSafetyRequest(
+            Status.Position,
+            _spline.Operations.GetForwardVector(destinationPointId),
+            CurrentSpeed,
+            EntryCar.VehicleLengthPreMeters + EntryCar.VehicleLengthPostMeters,
+            _configuration.Extra.AiParams.LaneWidthMeters,
+            obstacles));
+        _laneChangeController.UpdateWaiting(
+            result.Status,
+            _sessionManager.ServerTimeMilliseconds);
+        return result.Status;
     }
 
     private void SetRandomSpeed()
@@ -631,10 +836,18 @@ public class AiState
 
         var splineLookahead = SplineLookahead();
         var playerObstacle = FindClosestPlayerObstacle();
+        var laneChangeSafety = UpdateLaneChangeSafety();
 
         ClosestAiObstacleDistance = splineLookahead.ClosestAiState != null ? splineLookahead.ClosestAiStateDistance : -1;
 
         if (playerObstacle.distance < _minObstacleDistance || splineLookahead.ClosestAiStateDistance < _minObstacleDistance)
+        {
+            targetSpeed = 0;
+            hasObstacle = true;
+        }
+
+        else if (_laneChangeController?.Phase == AiLaneChangePhase.Changing
+            && laneChangeSafety != AiLaneChangeSafetyStatus.Safe)
         {
             targetSpeed = 0;
             hasObstacle = true;
@@ -763,23 +976,49 @@ public class AiState
         }
 
         float moveMeters = (dt / 1000.0f) * CurrentSpeed;
-        if (!Move(_currentVecProgress + moveMeters) || !_junctionEvaluator.TryNext(CurrentSplinePointId, out var nextPoint))
+        Vector3 position;
+        Vector3 tangent;
+        AiLaneChangeMovement transition = default;
+        var laneMovement = _laneChangeController != null
+                           && _laneChangeController.TryMove(
+                               moveMeters,
+                               currentTime,
+                               out transition);
+        if (laneMovement)
+        {
+            position = transition.Pose.Position;
+            tangent = transition.Pose.Tangent;
+            if (transition.Completed)
+            {
+                CurrentSplinePointId = transition.DestinationPointId;
+                _currentVecProgress = transition.DestinationProgressMeters;
+                _currentVecLength = GetSegmentLength(CurrentSplinePointId);
+                CalculateTangents();
+            }
+        }
+        else if (!Move(_currentVecProgress + moveMeters)
+                 || !_junctionEvaluator.TryNext(CurrentSplinePointId, out var nextPoint))
         {
             Log.Debug("Car {SessionId} reached spline end, despawning", EntryCar.SessionId);
             Despawn();
             return;
         }
-
-        CatmullRom.CatmullRomPoint smoothPos = CatmullRom.Evaluate(ops.Points[CurrentSplinePointId].Position, 
-            ops.Points[nextPoint].Position, 
-            _startTangent, 
-            _endTangent, 
-            _currentVecProgress / _currentVecLength);
+        else
+        {
+            var smoothPos = CatmullRom.Evaluate(
+                ops.Points[CurrentSplinePointId].Position,
+                ops.Points[nextPoint].Position,
+                _startTangent,
+                _endTangent,
+                _currentVecProgress / _currentVecLength);
+            position = smoothPos.Position;
+            tangent = smoothPos.Tangent;
+        }
             
         Vector3 rotation = new Vector3
         {
-            X = MathF.Atan2(smoothPos.Tangent.Z, smoothPos.Tangent.X) - MathF.PI / 2,
-            Y = (MathF.Atan2(new Vector2(smoothPos.Tangent.Z, smoothPos.Tangent.X).Length(), smoothPos.Tangent.Y) - MathF.PI / 2) * -1f,
+            X = MathF.Atan2(tangent.Z, tangent.X) - MathF.PI / 2,
+            Y = (MathF.Atan2(new Vector2(tangent.Z, tangent.X).Length(), tangent.Y) - MathF.PI / 2) * -1f,
             Z = ops.GetCamber(CurrentSplinePointId, _currentVecProgress / _currentVecLength)
         };
 
@@ -787,9 +1026,9 @@ public class AiState
         byte encodedTyreAngularSpeed =  (byte) (Math.Clamp(MathF.Round(MathF.Log10(tyreAngularSpeed + 1.0f) * 20.0f) * Math.Sign(tyreAngularSpeed), -100.0f, 154.0f) + 100.0f);
 
         Status.Timestamp = _sessionManager.ServerTimeMilliseconds;
-        Status.Position = smoothPos.Position with { Y = smoothPos.Position.Y + EntryCar.AiSplineHeightOffsetMeters };
+        Status.Position = position with { Y = position.Y + EntryCar.AiSplineHeightOffsetMeters };
         Status.Rotation = rotation;
-        Status.Velocity = smoothPos.Tangent * CurrentSpeed;
+        Status.Velocity = tangent * CurrentSpeed;
         Status.SteerAngle = 127;
         Status.WheelAngle = 127;
         Status.TyreAngularSpeed[0] = encodedTyreAngularSpeed;

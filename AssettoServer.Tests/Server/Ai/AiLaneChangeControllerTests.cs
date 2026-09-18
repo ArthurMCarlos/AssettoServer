@@ -48,6 +48,24 @@ public class AiLaneChangeControllerTests
         });
     }
 
+    [Test]
+    public void WaitingRequestCanBeRebasedToCurrentAdjacentPoints()
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        controller.Request(Selection(), Cursor(0, 0), Cursor(10, 3), 0, 4);
+        var revised = Selection() with { FromPointId = 1, ToPointId = 11 };
+
+        controller.RefreshWaiting(revised, Cursor(1, 0), Cursor(11, 4), 5);
+        controller.UpdateWaiting(AiLaneChangeSafetyStatus.Safe, 10);
+        controller.TryMove(60, 10, out var movement);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(movement.DestinationPointId, Is.EqualTo(11));
+            Assert.That(movement.Pose.Position.Z, Is.EqualTo(4).Within(0.001));
+        });
+    }
+
     private static AiPursuitLaneSelection Selection() =>
         new(0, 10, AiLaneChangeDirection.Left,
             new AiRoutePlan(120, [new AiRouteNode(10, 0), new AiRouteNode(99, 120)],

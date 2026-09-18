@@ -42,7 +42,10 @@ public sealed record AiPursuitNavigationResult(
     int VisitedNodes,
     AiPursuitTargetLocationDiagnostics TargetLocationDiagnostics,
     float MaximumExploredDistanceMeters,
-    int JunctionEdgesExamined);
+    int JunctionEdgesExamined)
+{
+    public IReadOnlyList<int> TargetPointIds { get; init; } = [];
+}
 
 public sealed class AiPursuitNavigator
 {
@@ -109,7 +112,7 @@ public sealed class AiPursuitNavigator
 
         if (targetPointIds.Count == 0)
         {
-            return HandleFailure(
+            return AttachTargets(HandleFailure(
                 previous,
                 nowMilliseconds,
                 options.RouteGraceMilliseconds,
@@ -117,7 +120,7 @@ public sealed class AiPursuitNavigator
                 0,
                 location.Diagnostics,
                 0,
-                0);
+                0), targetPointIds);
         }
 
         if (previous != null
@@ -125,11 +128,11 @@ public sealed class AiPursuitNavigator
         {
             if (targetPointIds.Contains(previous.TargetPointId))
             {
-                return ActiveFromCache(
+                return AttachTargets(ActiveFromCache(
                     previous,
                     remainingPlan,
                     previous.TargetPointId,
-                    location.Diagnostics);
+                    location.Diagnostics), targetPointIds);
             }
 
             var extensionLimits = new AiRouteSearchLimits(
@@ -142,7 +145,7 @@ public sealed class AiPursuitNavigator
             if (extension.Plan != null)
             {
                 var combined = Combine(remainingPlan, extension.Plan);
-                return ActiveWithNewRoute(
+                return AttachTargets(ActiveWithNewRoute(
                     previous,
                     combined,
                     extension.Plan.Nodes[^1].PointId,
@@ -150,14 +153,14 @@ public sealed class AiPursuitNavigator
                         ? AiPursuitRouteUpdateKind.Recovered
                         : AiPursuitRouteUpdateKind.Extended,
                     extension,
-                    location.Diagnostics);
+                    location.Diagnostics), targetPointIds);
             }
         }
 
         var route = _tryPlan(policePointId, targetPointIds, options.SearchLimits);
         if (route.Plan != null)
         {
-            return ActiveWithNewRoute(
+            return AttachTargets(ActiveWithNewRoute(
                 previous,
                 route.Plan,
                 route.Plan.Nodes[^1].PointId,
@@ -167,10 +170,10 @@ public sealed class AiPursuitNavigator
                         ? AiPursuitRouteUpdateKind.Recovered
                         : AiPursuitRouteUpdateKind.Recalculated,
                 route,
-                location.Diagnostics);
+                location.Diagnostics), targetPointIds);
         }
 
-        return HandleFailure(
+        return AttachTargets(HandleFailure(
             previous,
             nowMilliseconds,
             options.RouteGraceMilliseconds,
@@ -178,8 +181,13 @@ public sealed class AiPursuitNavigator
             route.VisitedNodes,
             location.Diagnostics,
             route.MaximumExploredDistanceMeters,
-            route.JunctionEdgesExamined);
+            route.JunctionEdgesExamined), targetPointIds);
     }
+
+    private static AiPursuitNavigationResult AttachTargets(
+        AiPursuitNavigationResult result,
+        IReadOnlySet<int> targetPointIds) =>
+        result with { TargetPointIds = targetPointIds.OrderBy(id => id).ToArray() };
 
     private static AiPursuitNavigationResult ActiveFromCache(
         AiPursuitRouteState previous,
