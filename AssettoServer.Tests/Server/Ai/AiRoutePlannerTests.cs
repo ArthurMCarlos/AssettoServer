@@ -101,6 +101,28 @@ public class AiRoutePlannerTests
         Assert.That(planner.TryPlan(99, new HashSet<int> { 0 }, 100), Is.Null);
     }
 
+    [Test]
+    public void BuildsGraphLazilyAndOnlyOnce()
+    {
+        var buildCount = 0;
+        var graph = new AiRouteGraph(new Dictionary<int, AiRouteEdge[]>
+        {
+            [0] = []
+        });
+        var planner = new AiRoutePlanner(() =>
+        {
+            buildCount++;
+            return graph;
+        });
+
+        Assert.That(buildCount, Is.Zero);
+
+        planner.TryPlan(0, new HashSet<int> { 0 }, 100);
+        planner.TryPlan(0, new HashSet<int> { 0 }, 100);
+
+        Assert.That(buildCount, Is.EqualTo(1));
+    }
+
     private static AiRoutePlanner CreatePlanner(
         IReadOnlyDictionary<int, AiRouteEdge[]> edges) =>
         new(new AiRouteGraph(edges));

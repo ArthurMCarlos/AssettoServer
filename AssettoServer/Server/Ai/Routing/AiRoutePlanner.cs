@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Threading;
 using AssettoServer.Server.Ai.Splines;
 
 namespace AssettoServer.Server.Ai.Routing;
@@ -11,15 +12,21 @@ public sealed record AiRoutePlan(
 
 public sealed class AiRoutePlanner
 {
-    private readonly AiRouteGraph _graph;
+    private readonly Lazy<AiRouteGraph> _graph;
 
-    public AiRoutePlanner(AiSpline spline) : this(CreateGraph(spline))
+    public AiRoutePlanner(AiSpline spline) : this(() => CreateGraph(spline))
     {
     }
 
-    internal AiRoutePlanner(AiRouteGraph graph)
+    internal AiRoutePlanner(AiRouteGraph graph) : this(() => graph)
     {
-        _graph = graph;
+    }
+
+    internal AiRoutePlanner(Func<AiRouteGraph> graphFactory)
+    {
+        _graph = new Lazy<AiRouteGraph>(
+            graphFactory,
+            LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     public AiRoutePlan? TryPlan(
@@ -28,7 +35,8 @@ public sealed class AiRoutePlanner
         float maxDistanceMeters)
     {
         ArgumentNullException.ThrowIfNull(targetPointIds);
-        if (!_graph.ContainsPoint(startPointId)
+        var graph = _graph.Value;
+        if (!graph.ContainsPoint(startPointId)
             || targetPointIds.Count == 0
             || !float.IsFinite(maxDistanceMeters)
             || maxDistanceMeters < 0)
@@ -55,7 +63,7 @@ public sealed class AiRoutePlanner
             if (targetPointIds.Contains(pointId))
                 return Reconstruct(startPointId, pointId, knownDistance, predecessors);
 
-            foreach (var edge in _graph.GetEdges(pointId))
+            foreach (var edge in graph.GetEdges(pointId))
             {
                 if (edge.LengthMeters < 0 || !float.IsFinite(edge.LengthMeters))
                     continue;
