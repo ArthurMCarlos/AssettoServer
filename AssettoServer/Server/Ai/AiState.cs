@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.Drawing;
 using System.Numerics;
+using System.Threading;
+using AssettoServer.Server.Ai.Routing;
 using AssettoServer.Server.Ai.Splines;
 using AssettoServer.Server.Configuration;
 using AssettoServer.Server.Weather;
@@ -69,6 +71,8 @@ public class AiState
     private readonly WeatherManager _weatherManager;
     private readonly AiSpline _spline;
     private readonly JunctionEvaluator _junctionEvaluator;
+    private readonly AiRoutePlanner _routePlanner;
+    private AiPursuitSnapshot? _pursuit;
 
     private static readonly List<Color> CarColors =
     [
@@ -101,14 +105,156 @@ public class AiState
         _entryCarManager = entryCarManager;
         _spline = spline;
         _junctionEvaluator = new JunctionEvaluator(spline);
+        _routePlanner = new AiRoutePlanner(spline);
 
         _lastTick = _sessionManager.ServerTimeMilliseconds;
     }
 
     public void Despawn()
     {
+        ReleasePursuit();
         Initialized = false;
         _spline.SlowestAiStates.Leave(CurrentSplinePointId, this);
+    }
+
+    public bool ShouldRetainPursuit
+    {
+        get
+        {
+            var pursuit = Volatile.Read(ref _pursuit);
+            return pursuit != null
+                   && AiPursuitControl.ShouldRetain(
+                       Vector3.DistanceSquared(Status.Position, pursuit.TargetPosition),
+                       pursuit.MaxDistanceMeters);
+        }
+    }
+
+    public AiPursuitTrackingResult TrackPursuit(
+        EntryCar target,
+        float maxDistanceMeters)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        AiPursuitControl.ValidateMaximumDistance(maxDistanceMeters);
+
+        if (!Initialized)
+        {
+            return new AiPursuitTrackingResult(
+                AiPursuitTrackingStatus.WaitingForSpawn,
+                null,
+                target.Status.Velocity.Length());
+        }
+
+        var targetPosition = target.Status.Position;
+        var targetSpeed = target.Status.Velocity.Length();
+        var spatialDistanceSquared = Vector3.DistanceSquared(Status.Position, targetPosition);
+        if (!AiPursuitControl.ShouldRetain(spatialDistanceSquared, maxDistanceMeters))
+        {
+            ReleasePursuit();
+            return new AiPursuitTrackingResult(
+                AiPursuitTrackingStatus.MaxDistanceExceeded,
+                null,
+                targetSpeed);
+        }
+
+        var targetSpline = _spline.WorldToSpline(targetPosition);
+        if (targetSpline.PointId < 0
+            || targetSpline.DistanceSquared > _configuration.Extra.AiParams.MaxPlayerDistanceToAiSplineSquared)
+        {
+            UpdateTemporarilyUnavailableTarget(target.SessionId, targetPosition, maxDistanceMeters);
+            return new AiPursuitTrackingResult(
+                AiPursuitTrackingStatus.RouteTemporarilyUnavailable,
+                null,
+                targetSpeed);
+        }
+
+        var targetPointIds = new HashSet<int> { targetSpline.PointId };
+        var operations = _spline.Operations;
+        foreach (var lanePointId in _spline.GetLanes(targetSpline.PointId))
+        {
+            if (operations.IsSameDirection(CurrentSplinePointId, lanePointId))
+                targetPointIds.Add(lanePointId);
+        }
+
+        var route = _routePlanner.TryPlan(
+            CurrentSplinePointId,
+            targetPointIds,
+            maxDistanceMeters);
+        if (route == null)
+        {
+            ReleasePursuit();
+            return new AiPursuitTrackingResult(
+                AiPursuitTrackingStatus.NoRoute,
+                null,
+                targetSpeed);
+        }
+
+        var previous = Volatile.Read(ref _pursuit);
+        var desiredSpeed = previous?.TargetSessionId == target.SessionId
+            ? previous.DesiredSpeedMetersPerSecond
+            : null;
+        var snapshot = new AiPursuitSnapshot(
+            target.SessionId,
+            targetPosition,
+            maxDistanceMeters,
+            route,
+            desiredSpeed);
+        Interlocked.Exchange(ref _pursuit, snapshot);
+        _junctionEvaluator.SetExplicitDecisions(route.JunctionDecisions);
+
+        return new AiPursuitTrackingResult(
+            AiPursuitTrackingStatus.Active,
+            route.DistanceMeters,
+            targetSpeed);
+    }
+
+    public void SetPursuitDesiredSpeed(float metersPerSecond)
+    {
+        AiPursuitControl.ValidateDesiredSpeed(metersPerSecond);
+        while (true)
+        {
+            var current = Volatile.Read(ref _pursuit);
+            if (current == null)
+                return;
+
+            var updated = current with { DesiredSpeedMetersPerSecond = metersPerSecond };
+            if (ReferenceEquals(
+                    Interlocked.CompareExchange(ref _pursuit, updated, current),
+                    current))
+            {
+                return;
+            }
+        }
+    }
+
+    public void ReleasePursuit()
+    {
+        Interlocked.Exchange(ref _pursuit, null);
+        _junctionEvaluator.SetExplicitDecisions(null);
+    }
+
+    private void UpdateTemporarilyUnavailableTarget(
+        byte targetSessionId,
+        Vector3 targetPosition,
+        float maxDistanceMeters)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref _pursuit);
+            if (current == null || current.TargetSessionId != targetSessionId)
+                return;
+
+            var updated = current with
+            {
+                TargetPosition = targetPosition,
+                MaxDistanceMeters = maxDistanceMeters
+            };
+            if (ReferenceEquals(
+                    Interlocked.CompareExchange(ref _pursuit, updated, current),
+                    current))
+            {
+                return;
+            }
+        }
     }
 
     private void SetRandomSpeed()
@@ -480,8 +626,12 @@ public class AiState
             return;
         }
             
-        float targetSpeed = InitialMaxSpeed;
-        float maxSpeed = InitialMaxSpeed;
+        var pursuit = Volatile.Read(ref _pursuit);
+        float requestedSpeed = AiPursuitControl.ResolveRequestedSpeed(
+            InitialMaxSpeed,
+            pursuit?.DesiredSpeedMetersPerSecond);
+        float targetSpeed = requestedSpeed;
+        float maxSpeed = requestedSpeed;
         bool hasObstacle = false;
 
         var splineLookahead = SplineLookahead();
@@ -521,7 +671,7 @@ public class AiState
             }
         }
 
-        targetSpeed = Math.Min(splineLookahead.MaxSpeed, targetSpeed);
+        targetSpeed = AiPursuitControl.ApplySafetyLimit(targetSpeed, splineLookahead.MaxSpeed);
 
         if (CurrentSpeed == 0 && !_stoppedForObstacle)
         {
@@ -651,7 +801,14 @@ public class AiState
         Status.TyreAngularSpeed[1] = encodedTyreAngularSpeed;
         Status.TyreAngularSpeed[2] = encodedTyreAngularSpeed;
         Status.TyreAngularSpeed[3] = encodedTyreAngularSpeed;
-        Status.EngineRpm = (ushort)MathUtils.Lerp(EntryCar.AiIdleEngineRpm, EntryCar.AiMaxEngineRpm, CurrentSpeed / _configuration.Extra.AiParams.MaxSpeedMs);
+        var pursuitSpeed = Volatile.Read(ref _pursuit)?.DesiredSpeedMetersPerSecond;
+        var engineSpeedReference = pursuitSpeed.HasValue
+            ? Math.Max(_configuration.Extra.AiParams.MaxSpeedMs, pursuitSpeed.Value)
+            : _configuration.Extra.AiParams.MaxSpeedMs;
+        Status.EngineRpm = (ushort)MathUtils.Lerp(
+            EntryCar.AiIdleEngineRpm,
+            EntryCar.AiMaxEngineRpm,
+            Math.Clamp(CurrentSpeed / engineSpeedReference, 0, 1));
         Status.StatusFlag = CarStatusFlags.LightsOn
                             | CarStatusFlags.HighBeamsOff
                             | (_sessionManager.ServerTimeMilliseconds < _stoppedForCollisionUntil || CurrentSpeed < 20 / 3.6f ? CarStatusFlags.HazardsOn : 0)
