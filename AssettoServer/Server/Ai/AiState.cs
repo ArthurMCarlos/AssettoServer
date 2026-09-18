@@ -410,7 +410,8 @@ public class AiState
     {
         if (_laneChangeController?.Event == null
             || _laneChangeController.Phase is AiLaneChangePhase.None
-                or AiLaneChangePhase.Cooldown)
+                or AiLaneChangePhase.Cooldown
+            || !_laneChangeController.TryGetDestinationPose(out var destinationPose))
         {
             return AiLaneChangeSafetyStatus.Safe;
         }
@@ -443,10 +444,9 @@ public class AiState
             }
         }
 
-        var destinationPointId = _laneChangeController.Event.ToPointId;
         var result = AiLaneChangeSafety.Evaluate(new AiLaneChangeSafetyRequest(
-            Status.Position,
-            _spline.Operations.GetForwardVector(destinationPointId),
+            destinationPose.Position,
+            destinationPose.Tangent,
             CurrentSpeed,
             EntryCar.VehicleLengthPreMeters + EntryCar.VehicleLengthPostMeters,
             _configuration.Extra.AiParams.LaneWidthMeters,

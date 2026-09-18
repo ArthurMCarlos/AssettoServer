@@ -66,6 +66,16 @@ public class AiLaneChangeControllerTests
         });
     }
 
+    [Test]
+    public void ExposesDestinationPoseForSafetyProjectionWhileWaiting()
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        controller.Request(Selection(), Cursor(0, 0), Cursor(10, 3), 0, 4);
+
+        Assert.That(controller.TryGetDestinationPose(out var pose), Is.True);
+        Assert.That(pose.Position, Is.EqualTo(new Vector3(0, 0, 3)));
+    }
+
     private static AiPursuitLaneSelection Selection() =>
         new(0, 10, AiLaneChangeDirection.Left,
             new AiRoutePlan(120, [new AiRouteNode(10, 0), new AiRouteNode(99, 120)],

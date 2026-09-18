@@ -116,6 +116,19 @@ public sealed class AiLaneChangeController
             Publish(AiPursuitLaneChangeEventKind.RouteRevised, routeRevision, null);
     }
 
+    public bool TryGetDestinationPose(out AiSplinePose pose)
+    {
+        if (_destination == null
+            || Phase is AiLaneChangePhase.None or AiLaneChangePhase.Cooldown)
+        {
+            pose = default;
+            return false;
+        }
+
+        pose = _destination.Evaluate();
+        return true;
+    }
+
 
     public bool TryMove(
         float distanceMeters,
