@@ -141,6 +141,28 @@ public class AiPursuitTargetLocatorTests
         });
     }
 
+    [Test]
+    public void ExpandsLaneEquivalentsFromDirectionRejectedSpatialSeed()
+    {
+        var locator = new AiPursuitTargetLocator(
+            (_, _) =>
+            [
+                new AiPursuitTargetCandidateSource(10, 1, -Vector3.UnitX)
+            ],
+            (pointId, _) => pointId == 10
+                ? [new AiPursuitTargetCandidateSource(99, 16, Vector3.UnitX)]
+                : []);
+
+        var result = locator.LocateCandidates(
+            Vector3.Zero,
+            Vector3.UnitX * 20,
+            maximumDistanceSquared: 49,
+            maximumCandidates: 16);
+
+        Assert.That(result.Candidates.Select(candidate => candidate.PointId),
+            Is.EqualTo(new[] { 99 }));
+    }
+
     private static AiPursuitTargetLocator CreateLocator(
         params AiPursuitTargetCandidateSource[] sources) =>
         new((_, _) => sources);

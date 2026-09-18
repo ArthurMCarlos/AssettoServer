@@ -92,7 +92,7 @@ public sealed class AiPursuitTargetLocator
         var speed = velocity.Length();
         var hasDirection = speed >= DirectionSpeedThreshold;
         var velocityDirection = hasDirection ? velocity / speed : Vector3.Zero;
-        var spatialCandidates = new List<AiPursuitTargetCandidate>();
+        var spatialSources = new List<AiPursuitTargetCandidateSource>();
         var spatialPointIds = new List<int>();
         var laneEquivalentPointIds = new List<int>();
         var rejections = new List<AiPursuitTargetRejection>();
@@ -100,34 +100,51 @@ public sealed class AiPursuitTargetLocator
         foreach (var source in _findNearest(position, maximumCandidates))
         {
             spatialPointIds.Add(source.PointId);
+            if (!float.IsFinite(source.DistanceSquared) || source.DistanceSquared < 0)
+            {
+                rejections.Add(new AiPursuitTargetRejection(
+                    source.PointId,
+                    AiPursuitTargetRejectionReason.InvalidDistance));
+                continue;
+            }
+
+            if (source.DistanceSquared > maximumDistanceSquared)
+            {
+                rejections.Add(new AiPursuitTargetRejection(
+                    source.PointId,
+                    AiPursuitTargetRejectionReason.OutsideMaximumDistance));
+                continue;
+            }
+
+            spatialSources.Add(source);
+        }
+
+        var orderedSpatialSources = spatialSources
+            .OrderBy(source => source.DistanceSquared)
+            .ThenBy(source => source.PointId)
+            .Take(maximumCandidates)
+            .ToArray();
+        var candidates = new Dictionary<int, AiPursuitTargetCandidate>();
+
+        foreach (var spatialSource in orderedSpatialSources)
+        {
             if (TryCreateCandidate(
-                    source,
+                    spatialSource,
                     velocityDirection,
                     hasDirection,
                     maximumDistanceSquared,
-                    enforceMaximumDistance: true,
-                    out var candidate,
-                    out var rejection))
+                    enforceMaximumDistance: false,
+                    out var spatialCandidate,
+                    out var spatialRejection))
             {
-                spatialCandidates.Add(candidate);
+                candidates.TryAdd(spatialCandidate.PointId, spatialCandidate);
             }
             else
             {
-                rejections.Add(rejection);
+                rejections.Add(spatialRejection);
             }
-        }
 
-        var orderedSpatialCandidates = spatialCandidates
-            .OrderBy(candidate => candidate.DistanceSquared)
-            .ThenBy(candidate => candidate.PointId)
-            .Take(maximumCandidates)
-            .ToArray();
-        var candidates = orderedSpatialCandidates.ToDictionary(
-            candidate => candidate.PointId);
-
-        foreach (var spatialCandidate in orderedSpatialCandidates)
-        {
-            foreach (var source in _findLaneEquivalents(spatialCandidate.PointId, position))
+            foreach (var source in _findLaneEquivalents(spatialSource.PointId, position))
             {
                 if (candidates.ContainsKey(source.PointId))
                     continue;
