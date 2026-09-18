@@ -1,17 +1,30 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Threading;
 
 namespace AssettoServer.Server.Ai.Splines;
 
 public class JunctionEvaluator
 {
     private readonly ConcurrentDictionary<int, bool>? _evaluated;
-    private readonly AiSpline _spline;
+    private readonly AiSpline? _spline;
+    private readonly Func<int, float> _getProbability;
+    private IReadOnlyDictionary<int, bool>? _explicitDecisions;
 
     public JunctionEvaluator(AiSpline spline, bool savesState = true)
     {
         _spline = spline;
-        
+        _getProbability = junctionId => spline.Junctions[junctionId].Probability;
+
+        if (savesState)
+            _evaluated = new ConcurrentDictionary<int, bool>();
+    }
+
+    internal JunctionEvaluator(Func<int, float> getProbability, bool savesState = true)
+    {
+        _getProbability = getProbability;
+
         if (savesState)
             _evaluated = new ConcurrentDictionary<int, bool>();
     }
@@ -21,10 +34,22 @@ public class JunctionEvaluator
         _evaluated?.Clear();
     }
 
+    public void SetExplicitDecisions(IReadOnlyDictionary<int, bool>? decisions)
+    {
+        Volatile.Write(ref _explicitDecisions,
+            decisions == null ? null : new Dictionary<int, bool>(decisions));
+    }
+
     public bool WillTakeJunction(int junctionId)
     {
-        ref readonly var junction = ref _spline.Junctions[junctionId]; 
-        bool result = Random.Shared.NextDouble() < junction.Probability;
+        var explicitDecisions = Volatile.Read(ref _explicitDecisions);
+        if (explicitDecisions != null
+            && explicitDecisions.TryGetValue(junctionId, out var explicitDecision))
+        {
+            return explicitDecision;
+        }
+
+        bool result = Random.Shared.NextDouble() < _getProbability(junctionId);
         return _evaluated?.GetOrAdd(junctionId, result) ?? result;
     }
 
@@ -35,16 +60,16 @@ public class JunctionEvaluator
 
     public int Next(int pointId, int count = 1)
     {
-        var points = _spline.Points;
-        var junctions = _spline.Junctions;
-        
+        var spline = _spline ?? throw new InvalidOperationException("Spline traversal is unavailable");
+        var points = spline.Points;
+        var junctions = spline.Junctions;
+
         for (int i = 0; i < count && pointId >= 0; i++)
         {
             ref readonly var point = ref points[pointId];
             if (point.JunctionStartId >= 0)
             {
                 var junctionId = point.JunctionStartId;
-
                 bool result = WillTakeJunction(junctionId);
                 pointId = result ? junctions[junctionId].EndPointId : point.NextId;
             }
@@ -65,9 +90,10 @@ public class JunctionEvaluator
 
     public int Previous(int pointId, int count = 1)
     {
-        var points = _spline.Points;
-        var junctions = _spline.Junctions;
-        
+        var spline = _spline ?? throw new InvalidOperationException("Spline traversal is unavailable");
+        var points = spline.Points;
+        var junctions = spline.Junctions;
+
         for (int i = 0; i < count && pointId >= 0; i++)
         {
             ref readonly var point = ref points[pointId];
@@ -75,7 +101,6 @@ public class JunctionEvaluator
             {
                 var junctionId = point.JunctionEndId;
                 ref readonly var junction = ref junctions[junctionId];
-
                 bool result = false;
                 if (_evaluated != null && _evaluated.TryGetValue(junctionId, out var value))
                 {
@@ -86,7 +111,7 @@ public class JunctionEvaluator
                     result = Random.Shared.NextDouble() < junction.Probability;
                     _evaluated?.TryAdd(junctionId, result);
                 }
-                    
+
                 pointId = result ? junction.StartPointId : point.PreviousId;
             }
             else
@@ -97,7 +122,7 @@ public class JunctionEvaluator
 
         return pointId;
     }
-        
+
     public bool TryPrevious(int pointId, out int nextPointId, int count = 1)
     {
         nextPointId = Previous(pointId, count);
