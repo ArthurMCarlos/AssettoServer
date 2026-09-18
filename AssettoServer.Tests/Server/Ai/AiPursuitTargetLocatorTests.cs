@@ -75,6 +75,31 @@ public class AiPursuitTargetLocatorTests
             Is.EqualTo(new[] { 10, 20 }));
     }
 
+    [Test]
+    public void ExpandsAcceptedSpatialSeedsToLaneEquivalentPoints()
+    {
+        var spatialSeeds = Enumerable.Range(10, 16)
+            .Select(pointId => new AiPursuitTargetCandidateSource(
+                pointId,
+                pointId - 9,
+                Vector3.UnitX))
+            .ToArray();
+        var locator = new AiPursuitTargetLocator(
+            (_, _) => spatialSeeds,
+            (pointId, _) => pointId == 10
+                ? [new AiPursuitTargetCandidateSource(99, 64, Vector3.UnitX)]
+                : []);
+
+        var candidates = locator.FindCandidates(
+            Vector3.Zero,
+            Vector3.UnitX * 20,
+            maximumDistanceSquared: 49,
+            maximumCandidates: 16);
+
+        Assert.That(candidates.Select(candidate => candidate.PointId),
+            Does.Contain(99));
+    }
+
     private static AiPursuitTargetLocator CreateLocator(
         params AiPursuitTargetCandidateSource[] sources) =>
         new((_, _) => sources);

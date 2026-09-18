@@ -14,13 +14,20 @@ namespace AssettoServer.Server.Ai.Splines;
 
 public class FastLaneParser
 {
-    private readonly ACServerConfiguration _configuration;
+    private readonly string _track;
+    private readonly AiParams _aiParams;
 
     private ILogger _logger = Log.Logger;
 
     public FastLaneParser(ACServerConfiguration configuration)
+        : this(configuration.Server.Track, configuration.Extra.AiParams)
     {
-        _configuration = configuration;
+    }
+
+    internal FastLaneParser(string track, AiParams aiParams)
+    {
+        _track = track;
+        _aiParams = aiParams;
     }
 
     private void CheckConfig(TrafficConfiguration configuration)
@@ -30,7 +37,8 @@ public class FastLaneParser
             Log.Information("Loading AI spline by {Author}, version {Version}", configuration.Author, configuration.Version);
         }
             
-        if (!string.IsNullOrWhiteSpace(configuration.Track) && Path.GetFileName(_configuration.Server.Track) != configuration.Track)
+        if (!string.IsNullOrWhiteSpace(configuration.Track)
+            && Path.GetFileName(_track) != configuration.Track)
         {
             throw new InvalidOperationException($"Mismatched AI spline, AI spline is for track {configuration.Track}");
         }
@@ -114,7 +122,12 @@ public class FastLaneParser
             throw new InvalidOperationException($"No AI splines found. Please put at least one AI spline fast_lane.ai(p) into {Path.GetFullPath(folder)}");
         }
 
-        return new MutableAiSpline(splines, _configuration.Extra.AiParams.LaneWidthMeters, _configuration.Extra.AiParams.TwoWayTraffic, configuration, _logger);
+        return new MutableAiSpline(
+            splines,
+            _aiParams.LaneWidthMeters,
+            _aiParams.TwoWayTraffic,
+            configuration,
+            _logger);
     }
 
     private SplinePoint[] FromFileV7(BinaryReader reader, int idOffset)
@@ -213,7 +226,7 @@ public class FastLaneParser
         };
 
         MovingAverage? avg = null;
-        if (_configuration.Extra.AiParams.SmoothCamber)
+        if (_aiParams.SmoothCamber)
         {
             avg = new MovingAverage(5);
         }
