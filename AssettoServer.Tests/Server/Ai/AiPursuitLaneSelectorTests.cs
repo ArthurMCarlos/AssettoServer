@@ -17,10 +17,11 @@ public class AiPursuitLaneSelectorTests
             [10] = Plan(10, 99, 80)
         });
 
-        var result = selector.Select(0, Targets, Limits, 60);
+        var result = selector.Select(0, Targets, Limits, 60, 1000);
 
         Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Stay));
         Assert.That(result.Selection, Is.Null);
+        Assert.That(result.Reason, Is.EqualTo(AiPursuitLaneEvaluationReason.CurrentLaneValid));
     }
 
     [Test]
@@ -33,7 +34,7 @@ public class AiPursuitLaneSelectorTests
             [20] = null
         });
 
-        var result = selector.Select(0, Targets, Limits, 60);
+        var result = selector.Select(0, Targets, Limits, 60, 1000);
 
         Assert.Multiple(() =>
         {
@@ -42,6 +43,8 @@ public class AiPursuitLaneSelectorTests
             Assert.That(result.Selection.ToPointId, Is.EqualTo(10));
             Assert.That(result.Selection.Direction, Is.EqualTo(AiLaneChangeDirection.Left));
             Assert.That(result.Selection.DistanceToDecisionMeters, Is.EqualTo(120));
+            Assert.That(result.Selection.JunctionId, Is.EqualTo(7));
+            Assert.That(result.Reason, Is.EqualTo(AiPursuitLaneEvaluationReason.RoutePreparation));
         });
     }
 
@@ -55,7 +58,7 @@ public class AiPursuitLaneSelectorTests
             [20] = null
         });
 
-        var result = selector.Select(0, Targets, Limits, 60);
+        var result = selector.Select(0, Targets, Limits, 60, 1000);
 
         Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Unreachable));
         Assert.That(result.Candidates.Single(candidate => candidate.PointId == 10).Rejection,
@@ -75,10 +78,72 @@ public class AiPursuitLaneSelectorTests
                 return Search(start == 30 ? Plan(30, 99, 120, 7) : null);
             });
 
-        var result = selector.Select(0, Targets, Limits, 60);
+        var result = selector.Select(0, Targets, Limits, 60, 1000);
 
         Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Unreachable));
         Assert.That(requestedStarts, Is.EqualTo(new[] { 0, 10, 20 }));
+    }
+
+    [Test]
+    public void RejectsAdjacentRouteWithoutRealJunction()
+    {
+        var selector = CreateSelector(new Dictionary<int, AiRoutePlan?>
+        {
+            [0] = null,
+            [10] = Plan(10, 99, 120),
+            [20] = null
+        });
+
+        var result = selector.Select(0, Targets, Limits, 60, 1000);
+
+        Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Unreachable));
+        Assert.That(result.Candidates.Single(candidate => candidate.PointId == 10).Rejection,
+            Is.EqualTo(AiPursuitLaneRejectionReason.NoRealJunction));
+    }
+
+    [Test]
+    public void RejectsJunctionBeyondPreparationLookahead()
+    {
+        var selector = CreateSelector(new Dictionary<int, AiRoutePlan?>
+        {
+            [0] = null,
+            [10] = Plan(10, 99, 1001, junctionId: 7),
+            [20] = null
+        });
+
+        var result = selector.Select(0, Targets, Limits, 60, 1000);
+
+        Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Unreachable));
+        Assert.That(result.Candidates.Single(candidate => candidate.PointId == 10).Rejection,
+            Is.EqualTo(AiPursuitLaneRejectionReason.BeyondLookahead));
+    }
+
+    [Test]
+    public void ReportsRouteEvidenceForUnreachableCurrentAndAdjacentLanes()
+    {
+        var selector = new AiPursuitLaneSelector(
+            _ => new AiAdjacentLanePoints(10, 20),
+            (_, _) => true,
+            (start, _, _) => new AiRouteSearchResult(
+                null,
+                start == 0
+                    ? AiRouteSearchFailure.DistanceLimit
+                    : AiRouteSearchFailure.Unreachable,
+                3,
+                start == 0 ? 999 : 40,
+                start == 0 ? 12 : 0),
+            _ => null);
+
+        var result = selector.Select(0, Targets, Limits, 60, 1000);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.CurrentLaneRoute.SearchFailure,
+                Is.EqualTo(AiRouteSearchFailure.DistanceLimit));
+            Assert.That(result.CurrentLaneRoute.MaximumExploredDistanceMeters, Is.EqualTo(999));
+            Assert.That(result.CurrentLaneRoute.JunctionEdgesExamined, Is.EqualTo(12));
+            Assert.That(result.CandidateLaneRoutes, Has.Count.EqualTo(2));
+        });
     }
 
     private static AiPursuitLaneSelector CreateSelector(
@@ -86,7 +151,12 @@ public class AiPursuitLaneSelectorTests
         new(
             _ => new AiAdjacentLanePoints(10, 20),
             (_, _) => true,
-            (start, _, _) => Search(plans.GetValueOrDefault(start)));
+            (start, _, _) => Search(plans.GetValueOrDefault(start)),
+            plan => plan.JunctionDecisions.Count == 0
+                ? null
+                : new AiPursuitLaneDecision(
+                    plan.JunctionDecisions.Keys.Single(),
+                    plan.DistanceMeters));
 
     private static AiRouteSearchResult Search(AiRoutePlan? plan) =>
         new(plan, plan == null ? AiRouteSearchFailure.Unreachable : AiRouteSearchFailure.None, 1);
