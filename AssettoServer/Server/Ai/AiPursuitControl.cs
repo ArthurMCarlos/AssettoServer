@@ -65,12 +65,11 @@ public sealed record AiPursuitTrackingResult(
 public sealed record AiPursuitLaneChangeDiagnostics(
     long Revision,
     AiPursuitLaneChangeEventKind EventKind,
-    int FromPointId,
-    int ToPointId,
-    AiLaneChangeDirection Direction,
+    int? FromPointId,
+    int? ToPointId,
+    AiLaneChangeDirection? Direction,
     long RouteRevision,
-    float? DistanceToDecisionMeters,
-    string? BlockingReason)
+    float? DistanceToDecisionMeters)
 {
     public AiPursuitLaneChangeDiagnosticReason Reason { get; init; }
     public int PolicePointId { get; init; }

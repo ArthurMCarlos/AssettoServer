@@ -59,6 +59,33 @@ public class AiPursuitLaneChangePipelineTests
         });
     }
 
+    [Test]
+    public void CooldownReportsTypedReasonAndDoesNotPrepareRequest()
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        var pipeline = CreatePipeline(controller);
+        var navigation = ActiveFallback();
+        var options = new AiPursuitLaneChangeOptions(true, 60, 3000, 1000);
+        var limits = new AiRouteSearchLimits(20_000, 50_000);
+
+        var prepared = pipeline.Evaluate(0, 0, 100, navigation, null,
+            options, limits, 0);
+        controller.UpdateWaiting(AiLaneChangeSafetyStatus.Safe, 0);
+        Assert.That(controller.TryMove(60, 0, out var movement), Is.True);
+        Assert.That(movement.Completed, Is.True);
+
+        var result = pipeline.Evaluate(0, 0, 100, navigation, null,
+            options, limits, 100);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.RequestPrepared, Is.False);
+            Assert.That(result.ControllerPhase, Is.EqualTo(AiLaneChangePhase.Cooldown));
+            Assert.That(result.Evaluation.Reason,
+                Is.EqualTo(AiPursuitLaneEvaluationReason.Cooldown));
+        });
+    }
+
     private static AiPursuitLaneChangePipeline CreatePipeline(
         AiLaneChangeController controller,
         bool currentReachesPhysicalTarget = false)

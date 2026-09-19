@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using AssettoServer.Server.Ai.Routing;
 
 namespace AssettoServer.Server.Ai;
@@ -16,15 +17,61 @@ public sealed class AiPursuitLaneDiagnosticTracker
     {
         ArgumentNullException.ThrowIfNull(evaluation);
         var selection = evaluation.Selection;
+        var candidate = selection == null
+            ? evaluation.CandidateLaneRoutes.FirstOrDefault()
+            : null;
         var reason = MapReason(evaluation.Reason);
         var key = new SemanticKey(
             reason,
-            policePointId,
             preferredPhysicalTargetPointId,
             selection?.FromPointId,
-            selection?.ToPointId,
-            selection?.Direction,
-            selection?.JunctionId,
+            selection?.ToPointId ?? candidate?.PointId,
+            selection?.Direction ?? candidate?.Direction,
+            selection?.JunctionId ?? candidate?.JunctionId,
+            null,
+            AiPursuitLaneChangeEventKind.Evaluated,
+            CreateCandidateEvidence(evaluation));
+        if (_lastKey == key)
+            return null;
+
+        _lastKey = key;
+        return new AiPursuitLaneChangeDiagnostics(
+            ++_revision,
+            AiPursuitLaneChangeEventKind.Evaluated,
+            selection?.FromPointId,
+            selection?.ToPointId ?? candidate?.PointId,
+            selection?.Direction ?? candidate?.Direction,
+            routeRevision,
+            selection?.DistanceToDecisionMeters ?? candidate?.DistanceToDecisionMeters)
+        {
+            Reason = reason,
+            PolicePointId = policePointId,
+            PreferredPhysicalTargetPointId = preferredPhysicalTargetPointId,
+            JunctionId = selection?.JunctionId ?? candidate?.JunctionId,
+            CurrentLaneRoute = evaluation.CurrentLaneRoute,
+            CandidateLaneRoutes = evaluation.CandidateLaneRoutes
+        };
+    }
+
+    public AiPursuitLaneChangeDiagnostics? PublishGate(
+        int policePointId,
+        int? preferredPhysicalTargetPointId,
+        long routeRevision,
+        AiPursuitLaneChangeDiagnosticReason reason)
+    {
+        if (reason is not (AiPursuitLaneChangeDiagnosticReason.Disabled
+            or AiPursuitLaneChangeDiagnosticReason.NoPhysicalTarget))
+        {
+            throw new ArgumentOutOfRangeException(nameof(reason));
+        }
+
+        var key = new SemanticKey(
+            reason,
+            preferredPhysicalTargetPointId,
+            null,
+            null,
+            null,
+            null,
             null,
             AiPursuitLaneChangeEventKind.Evaluated);
         if (_lastKey == key)
@@ -34,19 +81,15 @@ public sealed class AiPursuitLaneDiagnosticTracker
         return new AiPursuitLaneChangeDiagnostics(
             ++_revision,
             AiPursuitLaneChangeEventKind.Evaluated,
-            selection?.FromPointId ?? policePointId,
-            selection?.ToPointId ?? policePointId,
-            selection?.Direction ?? AiLaneChangeDirection.Left,
+            null,
+            null,
+            null,
             routeRevision,
-            selection?.DistanceToDecisionMeters,
             null)
         {
             Reason = reason,
             PolicePointId = policePointId,
-            PreferredPhysicalTargetPointId = preferredPhysicalTargetPointId,
-            JunctionId = selection?.JunctionId,
-            CurrentLaneRoute = evaluation.CurrentLaneRoute,
-            CandidateLaneRoutes = evaluation.CandidateLaneRoutes
+            PreferredPhysicalTargetPointId = preferredPhysicalTargetPointId
         };
     }
 
@@ -76,17 +119,28 @@ public sealed class AiPursuitLaneDiagnosticTracker
                 AiPursuitLaneChangeDiagnosticReason.InsufficientPreparationDistance,
             AiPursuitLaneEvaluationReason.RoutePreparation =>
                 AiPursuitLaneChangeDiagnosticReason.RoutePreparation,
+            AiPursuitLaneEvaluationReason.Cooldown =>
+                AiPursuitLaneChangeDiagnosticReason.Cooldown,
             _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, null)
         };
 
+    private static string CreateCandidateEvidence(
+        AiPursuitLaneSelectionResult evaluation) =>
+        string.Join("|", evaluation.CandidateLaneRoutes
+            .OrderBy(candidate => candidate.Direction)
+            .ThenBy(candidate => candidate.PointId)
+            .Select(candidate =>
+                $"{candidate.PointId}:{candidate.Direction}:{candidate.SearchFailure}:" +
+                $"{candidate.JunctionId}:{candidate.Reason}"));
+
     private sealed record SemanticKey(
         AiPursuitLaneChangeDiagnosticReason Reason,
-        int PolicePointId,
         int? PreferredPhysicalTargetPointId,
         int? FromPointId,
         int? ToPointId,
         AiLaneChangeDirection? Direction,
         int? JunctionId,
         AiLaneChangeSafetyStatus? SafetyStatus,
-        AiPursuitLaneChangeEventKind EventKind);
+        AiPursuitLaneChangeEventKind EventKind,
+        string CandidateEvidence = "");
 }

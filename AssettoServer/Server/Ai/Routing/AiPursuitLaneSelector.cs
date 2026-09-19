@@ -37,7 +37,8 @@ public enum AiPursuitLaneEvaluationReason
     NoRealJunction,
     BeyondLookahead,
     InsufficientPreparationDistance,
-    RoutePreparation
+    RoutePreparation,
+    Cooldown
 }
 
 public readonly record struct AiAdjacentLanePoints(int LeftPointId, int RightPointId);

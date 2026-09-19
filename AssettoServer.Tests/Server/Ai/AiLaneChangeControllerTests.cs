@@ -8,6 +8,21 @@ namespace AssettoServer.Tests.Server.Ai;
 public class AiLaneChangeControllerTests
 {
     [Test]
+    public void PublicLifecycleEventValuesRemainBackwardCompatible()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That((int)AiPursuitLaneChangeEventKind.Required, Is.Zero);
+            Assert.That((int)AiPursuitLaneChangeEventKind.Waiting, Is.EqualTo(1));
+            Assert.That((int)AiPursuitLaneChangeEventKind.Started, Is.EqualTo(2));
+            Assert.That((int)AiPursuitLaneChangeEventKind.Completed, Is.EqualTo(3));
+            Assert.That((int)AiPursuitLaneChangeEventKind.Cancelled, Is.EqualTo(4));
+            Assert.That((int)AiPursuitLaneChangeEventKind.RouteRevised, Is.EqualTo(5));
+            Assert.That((int)AiPursuitLaneChangeEventKind.Evaluated, Is.EqualTo(6));
+        });
+    }
+
+    [Test]
     public void WaitsForSafeGapThenCompletesOnDestinationCursor()
     {
         var controller = new AiLaneChangeController(60, 3000);

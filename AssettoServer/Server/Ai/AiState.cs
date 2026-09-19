@@ -221,10 +221,29 @@ public class AiState
         {
             navigation = committedNavigation;
         }
+        else
+        {
+            var routeRevision = navigation.State?.Revision
+                                ?? previousNavigation?.Revision
+                                ?? 0;
+            var cancelled = _laneChangeController?.CancelWaiting(routeRevision) == true;
+            if (!cancelled)
+            {
+                laneEvaluationDiagnostics = _laneDiagnosticTracker.PublishGate(
+                    CurrentSplinePointId,
+                    navigation.PreferredPhysicalTargetPointId,
+                    routeRevision,
+                    options.LaneChange is { Enabled: true }
+                        ? AiPursuitLaneChangeDiagnosticReason.NoPhysicalTarget
+                        : AiPursuitLaneChangeDiagnosticReason.Disabled);
+            }
+        }
         var searchDiagnostics = AiPursuitControl.CreateSearchDiagnostics(
             navigation,
             CurrentSplinePointId,
             previousNavigation?.TargetPointId);
+        var laneChangeDiagnostics = CreateLaneChangeDiagnostics(
+            navigation.PreferredPhysicalTargetPointId) ?? laneEvaluationDiagnostics;
 
         if (navigation.Status == AiPursuitNavigationStatus.NoRoute)
         {
@@ -234,7 +253,7 @@ public class AiState
                 null,
                 targetSpeed,
                 SearchDiagnostics: searchDiagnostics,
-                LaneChangeDiagnostics: laneEvaluationDiagnostics);
+                LaneChangeDiagnostics: laneChangeDiagnostics);
         }
 
         var desiredSpeed = previous?.TargetSessionId == target.SessionId
@@ -258,9 +277,7 @@ public class AiState
                 null,
                 targetSpeed,
                 SearchDiagnostics: searchDiagnostics,
-                LaneChangeDiagnostics: CreateLaneChangeDiagnostics(
-                    navigation.PreferredPhysicalTargetPointId)
-                    ?? laneEvaluationDiagnostics);
+                LaneChangeDiagnostics: laneChangeDiagnostics);
         }
 
         var diagnostics = AiPursuitControl.CreateRouteDiagnostics(
@@ -274,8 +291,7 @@ public class AiState
             targetSpeed,
             diagnostics,
             searchDiagnostics,
-            CreateLaneChangeDiagnostics(navigation.PreferredPhysicalTargetPointId)
-            ?? laneEvaluationDiagnostics);
+            laneChangeDiagnostics);
     }
 
     private bool TryRetainCommittedLaneChange(
@@ -327,8 +343,7 @@ public class AiState
                 laneEvent.ToPointId,
                 laneEvent.Direction,
                 laneEvent.RouteRevision,
-                laneEvent.DistanceToDecisionMeters,
-                laneEvent.SafetyStatus?.ToString())
+                laneEvent.DistanceToDecisionMeters)
             {
                 Reason = GetDiagnosticReason(laneEvent),
                 PolicePointId = CurrentSplinePointId,

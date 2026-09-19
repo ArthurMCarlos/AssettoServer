@@ -36,6 +36,74 @@ public class AiPursuitLaneDiagnosticsTests
         Assert.That(changed.JunctionId, Is.EqualTo(3));
     }
 
+    [Test]
+    public void MovingPolicePointAndRouteRevisionDoNotRepublishSameEvaluation()
+    {
+        var tracker = new AiPursuitLaneDiagnosticTracker();
+
+        var first = tracker.PublishEvaluation(100, 99, 4, Evaluation(500));
+        var duplicate = tracker.PublishEvaluation(101, 99, 5, Evaluation(498));
+
+        Assert.That(first, Is.Not.Null);
+        Assert.That(duplicate, Is.Null);
+    }
+
+    [Test]
+    public void GateReasonPublishesOnceAndRetainsNullableLaneEvidence()
+    {
+        var tracker = new AiPursuitLaneDiagnosticTracker();
+
+        var first = tracker.PublishGate(
+            100, null, 4, AiPursuitLaneChangeDiagnosticReason.NoPhysicalTarget);
+        var duplicate = tracker.PublishGate(
+            101, null, 5, AiPursuitLaneChangeDiagnosticReason.NoPhysicalTarget);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.Not.Null);
+            Assert.That(first!.FromPointId, Is.Null);
+            Assert.That(first.ToPointId, Is.Null);
+            Assert.That(first.Direction, Is.Null);
+            Assert.That(duplicate, Is.Null);
+        });
+    }
+
+    [Test]
+    public void ChangeInSecondRejectedLanePublishesNewEvaluation()
+    {
+        var tracker = new AiPursuitLaneDiagnosticTracker();
+        tracker.PublishEvaluation(0, 99, 4, EvaluationWithSecondCandidate(7));
+
+        var changed = tracker.PublishEvaluation(1, 99, 5,
+            EvaluationWithSecondCandidate(8));
+
+        Assert.That(changed, Is.Not.Null);
+        Assert.That(changed!.Revision, Is.EqualTo(2));
+    }
+
+    private static AiPursuitLaneSelectionResult EvaluationWithSecondCandidate(
+        int secondJunction)
+    {
+        var evaluation = Evaluation(500);
+        return evaluation with
+        {
+            CandidateLaneRoutes =
+            [
+                .. evaluation.CandidateLaneRoutes,
+                new AiPursuitLaneRouteDiagnostic(
+                    20,
+                    AiLaneChangeDirection.Right,
+                    AiRouteSearchFailure.None,
+                    700,
+                    700,
+                    1,
+                    secondJunction,
+                    600,
+                    AiPursuitLaneEvaluationReason.BeyondLookahead)
+            ]
+        };
+    }
+
     private static AiPursuitLaneSelectionResult Evaluation(
         float distanceToDecision,
         int junctionId = 2)

@@ -105,7 +105,11 @@ internal sealed class AiPursuitLaneChangePipeline
             nowMilliseconds,
             revision);
         if (!prepared)
+        {
+            if (_controller.Phase == AiLaneChangePhase.Cooldown)
+                evaluation = evaluation with { Reason = AiPursuitLaneEvaluationReason.Cooldown };
             return Result(navigation, evaluation, false);
+        }
 
         return Result(
             CreateEffectiveNavigation(navigation, selection, revision, sameRoute),

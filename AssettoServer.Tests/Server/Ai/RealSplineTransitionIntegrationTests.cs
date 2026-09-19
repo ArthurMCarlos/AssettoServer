@@ -209,6 +209,41 @@ public class RealSplineTransitionIntegrationTests
                 Is.EqualTo(scenario.JunctionId));
             Assert.That(controller.Phase, Is.EqualTo(AiLaneChangePhase.WaitingForGap));
         });
+
+        controller.UpdateWaiting(AiLaneChangeSafetyStatus.Safe, 0);
+        var moved = controller.TryMove(60, 100, out var movement);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(moved, Is.True);
+            Assert.That(movement.Completed, Is.True);
+            Assert.That(movement.DestinationPointId,
+                Is.Not.EqualTo(scenario.SourcePointId));
+            Assert.That(controller.Phase, Is.EqualTo(AiLaneChangePhase.Cooldown));
+            Assert.That(controller.Event!.Kind,
+                Is.EqualTo(AiPursuitLaneChangeEventKind.Completed));
+        });
+
+        var adoptedRoute = planner.TryPlan(
+            movement.DestinationPointId,
+            new HashSet<int> { scenario.TargetPointId },
+            limits);
+        var postCompletion = selector.Select(
+            movement.DestinationPointId,
+            new HashSet<int> { scenario.TargetPointId },
+            limits,
+            60,
+            1000);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(adoptedRoute.Plan, Is.Not.Null,
+                "Completed destination chain must still reach the physical anchor");
+            Assert.That(adoptedRoute.Plan!.Nodes[^1].PointId,
+                Is.EqualTo(scenario.TargetPointId));
+            Assert.That(postCompletion.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Stay),
+                "The adopted destination chain must not request an immediate return");
+        });
     }
 
     [Test]
