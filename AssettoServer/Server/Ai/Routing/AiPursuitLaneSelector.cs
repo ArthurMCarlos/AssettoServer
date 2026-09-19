@@ -50,7 +50,7 @@ public sealed record AiPursuitLaneSelection(
     AiRoutePlan DestinationPlan,
     float DistanceToDecisionMeters)
 {
-    public int JunctionId { get; init; }
+    public int? JunctionId { get; init; }
 }
 
 public sealed record AiPursuitLaneCandidateDiagnostic(

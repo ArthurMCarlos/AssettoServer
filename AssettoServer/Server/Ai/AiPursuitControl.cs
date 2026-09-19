@@ -70,7 +70,39 @@ public sealed record AiPursuitLaneChangeDiagnostics(
     AiLaneChangeDirection Direction,
     long RouteRevision,
     float? DistanceToDecisionMeters,
-    string? BlockingReason);
+    string? BlockingReason)
+{
+    public AiPursuitLaneChangeDiagnosticReason Reason { get; init; }
+    public int PolicePointId { get; init; }
+    public int? PreferredPhysicalTargetPointId { get; init; }
+    public int? JunctionId { get; init; }
+    public AiPursuitLaneRouteDiagnostic? CurrentLaneRoute { get; init; }
+    public IReadOnlyList<AiPursuitLaneRouteDiagnostic> CandidateLaneRoutes { get; init; } = [];
+    public AiLaneChangeSafetyStatus? SafetyStatus { get; init; }
+}
+
+public enum AiPursuitLaneChangeDiagnosticReason
+{
+    Disabled,
+    NoPhysicalTarget,
+    CurrentLaneValid,
+    NoAdjacentLane,
+    OppositeDirection,
+    NoForwardRoute,
+    NoRealJunction,
+    BeyondLookahead,
+    InsufficientPreparationDistance,
+    Cooldown,
+    ObstacleAhead,
+    ObstacleAlongside,
+    ObstacleBehind,
+    RouteRevisionChanged,
+    RoutePreparation,
+    Requested,
+    Started,
+    Completed,
+    Cancelled
+}
 
 internal sealed record AiPursuitSnapshot(
     byte TargetSessionId,

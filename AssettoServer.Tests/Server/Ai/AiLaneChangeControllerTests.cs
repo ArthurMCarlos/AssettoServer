@@ -94,6 +94,15 @@ public class AiLaneChangeControllerTests
     }
 
     [Test]
+    public void RequiredEventIncludesSelectedJunction()
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        controller.Request(Selection(), Cursor(0, 0), Cursor(10, 3), 0, 4);
+
+        Assert.That(controller.ConsumeEvent()!.JunctionId, Is.EqualTo(7));
+    }
+
+    [Test]
     public void ConcurrentResetSafetyAndMovementDoNotExposePartialState()
     {
         var controller = new AiLaneChangeController(60, 0);

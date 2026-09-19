@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using AssettoServer.Server.Ai.Routing;
 
 namespace AssettoServer.Server.Ai;
@@ -14,6 +15,7 @@ public enum AiLaneChangePhase
 
 public enum AiPursuitLaneChangeEventKind
 {
+    Evaluated,
     Required,
     Waiting,
     Started,
@@ -37,7 +39,10 @@ public sealed record AiLaneChangeEvent(
     AiLaneChangeDirection Direction,
     long RouteRevision,
     float? DistanceToDecisionMeters,
-    AiLaneChangeSafetyStatus? SafetyStatus);
+    AiLaneChangeSafetyStatus? SafetyStatus)
+{
+    public int? JunctionId { get; init; }
+}
 
 public readonly record struct AiLaneChangeMovement(
     AiSplinePose Pose,
@@ -342,7 +347,15 @@ public sealed class AiLaneChangeController
             selection.Direction,
             routeRevision,
             selection.DistanceToDecisionMeters,
-            safetyStatus);
+            safetyStatus)
+        {
+            JunctionId = selection.JunctionId
+                         ?? (selection.DestinationPlan.JunctionDecisions.Count > 0
+                             ? selection.DestinationPlan.JunctionDecisions.Keys
+                                 .OrderBy(id => id)
+                                 .First()
+                             : null)
+        };
         _events.Enqueue(_event);
     }
 
