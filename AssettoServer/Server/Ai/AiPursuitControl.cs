@@ -18,7 +18,8 @@ public enum AiPursuitTrackingStatus
 public sealed record AiPursuitLaneChangeOptions(
     bool Enabled,
     float DistanceMeters,
-    int CooldownMilliseconds);
+    int CooldownMilliseconds,
+    float LookaheadMeters = 1000);
 
 public sealed record AiPursuitTrackingOptions(
     float MaximumSpatialDistanceMeters,
@@ -183,6 +184,13 @@ public static class AiPursuitControl
             }
             if (laneChange.CooldownMilliseconds < 0)
                 throw new ArgumentOutOfRangeException(nameof(laneChange.CooldownMilliseconds));
+            if (!float.IsFinite(laneChange.LookaheadMeters)
+                || laneChange.LookaheadMeters < 100
+                || laneChange.LookaheadMeters > 5000
+                || laneChange.LookaheadMeters < laneChange.DistanceMeters)
+            {
+                throw new ArgumentOutOfRangeException(nameof(laneChange.LookaheadMeters));
+            }
         }
     }
 }

@@ -20,6 +20,37 @@ public class AiPursuitControlTests
             AiPursuitControl.ValidateTrackingOptions(options));
     }
 
+    [TestCase(99)]
+    [TestCase(5001)]
+    [TestCase(float.NaN)]
+    [TestCase(float.PositiveInfinity)]
+    public void RejectsInvalidLaneChangeLookahead(float lookaheadMeters)
+    {
+        var options = new AiPursuitTrackingOptions(
+            1500,
+            20_000,
+            50_000,
+            2000,
+            new AiPursuitLaneChangeOptions(true, 60, 3000, lookaheadMeters));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AiPursuitControl.ValidateTrackingOptions(options));
+    }
+
+    [Test]
+    public void RejectsLookaheadShorterThanPhysicalTransition()
+    {
+        var options = new AiPursuitTrackingOptions(
+            1500,
+            20_000,
+            50_000,
+            2000,
+            new AiPursuitLaneChangeOptions(true, 120, 3000, 100));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AiPursuitControl.ValidateTrackingOptions(options));
+    }
+
     [TestCase(1499, 1500, true)]
     [TestCase(1500, 1500, true)]
     [TestCase(1501, 1500, false)]
