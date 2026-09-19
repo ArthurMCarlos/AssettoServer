@@ -117,7 +117,7 @@ public sealed class AiLaneChangeController
         lock (_sync)
         {
             if (_phase == AiLaneChangePhase.Changing)
-                return true;
+                return false;
             if (_phase == AiLaneChangePhase.WaitingForGap)
             {
                 var routeChanged = !HasSameRoute(selection);
@@ -204,6 +204,25 @@ public sealed class AiLaneChangeController
     {
         lock (_sync)
             return _events.Count == 0 ? null : _events.Dequeue();
+    }
+
+    public bool TryGetCommittedRoute(
+        out AiPursuitLaneSelection selection,
+        out long routeRevision)
+    {
+        lock (_sync)
+        {
+            if (_phase != AiLaneChangePhase.Changing || _selection == null)
+            {
+                selection = null!;
+                routeRevision = 0;
+                return false;
+            }
+
+            selection = _selection;
+            routeRevision = _event?.RouteRevision ?? 0;
+            return true;
+        }
     }
 
     public AiLaneChangeReconcileResult ReconcileCurrentRoute(long routeRevision)

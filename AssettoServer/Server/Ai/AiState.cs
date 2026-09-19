@@ -181,38 +181,44 @@ public class AiState
                     options.MaximumRouteDistanceMeters,
                     options.MaximumVisitedNodes),
                 options.RouteGraceMilliseconds));
-        var currentLaneRouteActive = navigation.Status == AiPursuitNavigationStatus.Active;
-        if (currentLaneRouteActive)
+        if (!TryRetainCommittedLaneChange(navigation, out var committedNavigation))
         {
-            var reconcile = _laneChangeController?.ReconcileCurrentRoute(
-                navigation.State?.Revision ?? previousNavigation?.Revision ?? 0);
-            if (reconcile == AiLaneChangeReconcileResult.Changing
-                && previousNavigation != null)
+            if (navigation.Status == AiPursuitNavigationStatus.Active)
             {
-                navigation = RetainCommittedLaneChange(navigation, previousNavigation);
+                var reconcile = _laneChangeController?.ReconcileCurrentRoute(
+                    navigation.State?.Revision ?? previousNavigation?.Revision ?? 0);
+                if (reconcile == AiLaneChangeReconcileResult.Changing
+                    && TryRetainCommittedLaneChange(navigation, out committedNavigation))
+                {
+                    navigation = committedNavigation;
+                }
+            }
+            if (navigation.Status != AiPursuitNavigationStatus.Active
+                && options.LaneChange is { Enabled: true } laneChange
+                && navigation.TargetPointIds.Count > 0)
+            {
+                navigation = TryPrepareLaneChange(
+                    navigation,
+                    previousNavigation,
+                    laneChange,
+                    new AiRouteSearchLimits(
+                        options.MaximumRouteDistanceMeters,
+                        options.MaximumVisitedNodes));
+            }
+            if (navigation.Status != AiPursuitNavigationStatus.Active)
+            {
+                var reconcile = _laneChangeController?.ReconcileCurrentRoute(
+                    (previousNavigation?.Revision ?? 0) + 1);
+                if (reconcile == AiLaneChangeReconcileResult.Changing
+                    && TryRetainCommittedLaneChange(navigation, out committedNavigation))
+                {
+                    navigation = committedNavigation;
+                }
             }
         }
-        if (navigation.Status != AiPursuitNavigationStatus.Active
-            && options.LaneChange is { Enabled: true } laneChange
-            && navigation.TargetPointIds.Count > 0)
+        else
         {
-            navigation = TryPrepareLaneChange(
-                navigation,
-                previousNavigation,
-                laneChange,
-                new AiRouteSearchLimits(
-                    options.MaximumRouteDistanceMeters,
-                    options.MaximumVisitedNodes));
-        }
-        if (navigation.Status != AiPursuitNavigationStatus.Active)
-        {
-            var reconcile = _laneChangeController?.ReconcileCurrentRoute(
-                (previousNavigation?.Revision ?? 0) + 1);
-            if (reconcile == AiLaneChangeReconcileResult.Changing
-                && previousNavigation != null)
-            {
-                navigation = RetainCommittedLaneChange(navigation, previousNavigation);
-            }
+            navigation = committedNavigation;
         }
         var searchDiagnostics = AiPursuitControl.CreateSearchDiagnostics(
             navigation,
@@ -272,6 +278,9 @@ public class AiState
         AiPursuitLaneChangeOptions options,
         AiRouteSearchLimits limits)
     {
+        if (TryRetainCommittedLaneChange(failedNavigation, out var committedNavigation))
+            return committedNavigation;
+
         var targetPointIds = failedNavigation.TargetPointIds.ToHashSet();
         var laneResult = _laneSelector.Select(
             CurrentSplinePointId,
@@ -318,7 +327,9 @@ public class AiState
                 now,
                 revision))
         {
-            return failedNavigation;
+            return TryRetainCommittedLaneChange(failedNavigation, out committedNavigation)
+                ? committedNavigation
+                : failedNavigation;
         }
 
         UpdateLaneChangeSafety();
@@ -343,12 +354,26 @@ public class AiState
         };
     }
 
-    private static AiPursuitNavigationResult RetainCommittedLaneChange(
+    private bool TryRetainCommittedLaneChange(
         AiPursuitNavigationResult navigation,
-        AiPursuitRouteState previousNavigation) =>
-        new(
+        out AiPursuitNavigationResult committedNavigation)
+    {
+        if (_laneChangeController?.TryGetCommittedRoute(
+                out var selection,
+                out var revision) != true)
+        {
+            committedNavigation = null!;
+            return false;
+        }
+
+        var state = new AiPursuitRouteState(
+            selection.DestinationPlan.Nodes[^1].PointId,
+            selection.DestinationPlan,
+            revision,
+            null);
+        committedNavigation = new AiPursuitNavigationResult(
             AiPursuitNavigationStatus.Active,
-            previousNavigation,
+            state,
             AiPursuitRouteUpdateKind.Reused,
             AiRouteSearchFailure.None,
             navigation.VisitedNodes,
@@ -358,6 +383,8 @@ public class AiState
         {
             TargetPointIds = navigation.TargetPointIds
         };
+        return true;
+    }
 
     private static bool HasSameRoute(AiRoutePlan left, AiRoutePlan right)
     {

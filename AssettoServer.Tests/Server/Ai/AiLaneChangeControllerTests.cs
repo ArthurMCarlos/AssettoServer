@@ -166,6 +166,41 @@ public class AiLaneChangeControllerTests
         Assert.That(controller.ConsumeEvent(), Is.Null);
     }
 
+    [Test]
+    public void CommittedChangeRejectsNewPreparationAndExposesOriginalRoute()
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        var original = Selection();
+        controller.Request(original, Cursor(0, 0), Cursor(10, 3), 0, 4);
+        controller.UpdateWaiting(AiLaneChangeSafetyStatus.Safe, 0);
+        var replacement = original with
+        {
+            ToPointId = 20,
+            DestinationPlan = new AiRoutePlan(
+                80,
+                [new AiRouteNode(20, 0), new AiRouteNode(77, 80)],
+                new Dictionary<int, bool> { [9] = false })
+        };
+
+        var prepared = controller.Prepare(
+            replacement,
+            Cursor(0, 0),
+            Cursor(20, 6),
+            1,
+            5);
+        var committed = controller.TryGetCommittedRoute(
+            out var committedSelection,
+            out var routeRevision);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(prepared, Is.False);
+            Assert.That(committed, Is.True);
+            Assert.That(committedSelection, Is.EqualTo(original));
+            Assert.That(routeRevision, Is.EqualTo(4));
+        });
+    }
+
     private static void Repeat(
         Action action,
         System.Collections.Concurrent.ConcurrentQueue<Exception> failures)
