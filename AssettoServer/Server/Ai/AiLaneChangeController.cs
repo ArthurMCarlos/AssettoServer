@@ -22,6 +22,13 @@ public enum AiPursuitLaneChangeEventKind
     RouteRevised
 }
 
+public enum AiLaneChangeReconcileResult
+{
+    None,
+    Cancelled,
+    Changing
+}
+
 public sealed record AiLaneChangeEvent(
     long Revision,
     AiPursuitLaneChangeEventKind Kind,
@@ -100,6 +107,45 @@ public sealed class AiLaneChangeController
         }
     }
 
+    public bool Prepare(
+        AiPursuitLaneSelection selection,
+        AiSplineCursor source,
+        AiSplineCursor destination,
+        long nowMilliseconds,
+        long routeRevision)
+    {
+        lock (_sync)
+        {
+            if (_phase == AiLaneChangePhase.Changing)
+                return true;
+            if (_phase == AiLaneChangePhase.WaitingForGap)
+            {
+                var routeChanged = !HasSameRoute(selection);
+                _selection = selection;
+                _source = source;
+                _destination = destination;
+                if (routeChanged)
+                {
+                    Publish(
+                        AiPursuitLaneChangeEventKind.RouteRevised,
+                        routeRevision,
+                        null);
+                }
+                return true;
+            }
+            if (nowMilliseconds < _cooldownEnds)
+                return false;
+
+            _selection = selection;
+            _source = source;
+            _destination = destination;
+            _distanceTravelled = 0;
+            _phase = AiLaneChangePhase.WaitingForGap;
+            Publish(AiPursuitLaneChangeEventKind.Required, routeRevision, null);
+            return true;
+        }
+    }
+
     public void UpdateWaiting(AiLaneChangeSafetyStatus status, long nowMilliseconds)
     {
         lock (_sync)
@@ -129,8 +175,7 @@ public sealed class AiLaneChangeController
         {
             if (_phase != AiLaneChangePhase.WaitingForGap)
                 return;
-            var routeChanged = _selection?.ToPointId != selection.ToPointId
-                               || _event?.RouteRevision != routeRevision;
+            var routeChanged = !HasSameRoute(selection);
             _selection = selection;
             _source = source;
             _destination = destination;
@@ -161,6 +206,24 @@ public sealed class AiLaneChangeController
             return _events.Count == 0 ? null : _events.Dequeue();
     }
 
+    public AiLaneChangeReconcileResult ReconcileCurrentRoute(long routeRevision)
+    {
+        lock (_sync)
+        {
+            if (_phase == AiLaneChangePhase.Changing)
+                return AiLaneChangeReconcileResult.Changing;
+            if (_phase != AiLaneChangePhase.WaitingForGap)
+                return AiLaneChangeReconcileResult.None;
+
+            Publish(AiPursuitLaneChangeEventKind.Cancelled, routeRevision, null);
+            _phase = AiLaneChangePhase.None;
+            _selection = null;
+            _source = null;
+            _destination = null;
+            return AiLaneChangeReconcileResult.Cancelled;
+        }
+    }
+
 
     public bool TryMove(
         float distanceMeters,
@@ -177,14 +240,17 @@ public sealed class AiLaneChangeController
                 return false;
             }
 
-            if (!_source.TryAdvance(distanceMeters)
-                || !_destination.TryAdvance(distanceMeters))
+            var transitionDistance = Math.Min(
+                distanceMeters,
+                _distanceMeters - _distanceTravelled);
+            if (!_source.TryAdvance(transitionDistance)
+                || !_destination.TryAdvance(transitionDistance))
             {
                 ResetCore();
                 return false;
             }
 
-            _distanceTravelled = Math.Min(_distanceMeters, _distanceTravelled + distanceMeters);
+            _distanceTravelled += transitionDistance;
             var progress = _distanceTravelled / _distanceMeters;
             var pose = AiLaneChangeTrajectory.Blend(
                 _source.Evaluate(),
@@ -259,5 +325,31 @@ public sealed class AiLaneChangeController
             selection.DistanceToDecisionMeters,
             safetyStatus);
         _events.Enqueue(_event);
+    }
+
+    private bool HasSameRoute(AiPursuitLaneSelection selection)
+    {
+        if (_selection == null
+            || _selection.Direction != selection.Direction
+            || _selection.DestinationPlan.Nodes[^1].PointId
+            != selection.DestinationPlan.Nodes[^1].PointId
+            || _selection.DestinationPlan.JunctionDecisions.Count
+            != selection.DestinationPlan.JunctionDecisions.Count)
+        {
+            return false;
+        }
+
+        foreach (var decision in _selection.DestinationPlan.JunctionDecisions)
+        {
+            if (!selection.DestinationPlan.JunctionDecisions.TryGetValue(
+                    decision.Key,
+                    out var takeBranch)
+                || takeBranch != decision.Value)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

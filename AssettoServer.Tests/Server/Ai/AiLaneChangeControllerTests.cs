@@ -119,6 +119,53 @@ public class AiLaneChangeControllerTests
         Assert.That(failures, Is.Empty);
     }
 
+    [Test]
+    public void ReconcileAtomicallyCancelsWaitingButRetainsCommittedChange()
+    {
+        var waiting = new AiLaneChangeController(60, 3000);
+        waiting.Request(Selection(), Cursor(0, 0), Cursor(10, 3), 0, 4);
+        var cancelled = waiting.ReconcileCurrentRoute(5);
+
+        var changing = new AiLaneChangeController(60, 3000);
+        changing.Request(Selection(), Cursor(0, 0), Cursor(10, 3), 0, 4);
+        changing.UpdateWaiting(AiLaneChangeSafetyStatus.Safe, 0);
+        var retained = changing.ReconcileCurrentRoute(5);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cancelled, Is.EqualTo(AiLaneChangeReconcileResult.Cancelled));
+            Assert.That(waiting.Phase, Is.EqualTo(AiLaneChangePhase.None));
+            Assert.That(retained, Is.EqualTo(AiLaneChangeReconcileResult.Changing));
+            Assert.That(changing.Phase, Is.EqualTo(AiLaneChangePhase.Changing));
+        });
+    }
+
+    [Test]
+    public void FinalTickIsClampedToRemainingTransitionDistance()
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        controller.Request(Selection(), Cursor(0, 0), Cursor(10, 3), 0, 4);
+        controller.UpdateWaiting(AiLaneChangeSafetyStatus.Safe, 0);
+        controller.TryMove(59.7f, 0, out _);
+
+        Assert.That(controller.TryMove(0.8f, 1, out var movement), Is.True);
+        Assert.That(movement.Completed, Is.True);
+        Assert.That(movement.DestinationProgressMeters, Is.EqualTo(60).Within(0.001));
+    }
+
+    [Test]
+    public void PhysicalRebaseDoesNotPublishRouteRevision()
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        controller.Request(Selection(), Cursor(0, 0), Cursor(10, 3), 0, 4);
+        controller.ConsumeEvent();
+        var rebased = Selection() with { FromPointId = 1, ToPointId = 11 };
+
+        controller.RefreshWaiting(rebased, Cursor(1, 0), Cursor(11, 3), 5);
+
+        Assert.That(controller.ConsumeEvent(), Is.Null);
+    }
+
     private static void Repeat(
         Action action,
         System.Collections.Concurrent.ConcurrentQueue<Exception> failures)
