@@ -76,6 +76,66 @@ public class AiLaneChangeControllerTests
         Assert.That(pose.Position, Is.EqualTo(new Vector3(0, 0, 3)));
     }
 
+    [Test]
+    public void PreservesRequiredBeforeImmediateStartedEvent()
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        controller.Request(Selection(), Cursor(0, 0), Cursor(10, 3), 0, 4);
+        controller.UpdateWaiting(AiLaneChangeSafetyStatus.Safe, 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(controller.ConsumeEvent()!.Kind,
+                Is.EqualTo(AiPursuitLaneChangeEventKind.Required));
+            Assert.That(controller.ConsumeEvent()!.Kind,
+                Is.EqualTo(AiPursuitLaneChangeEventKind.Started));
+            Assert.That(controller.ConsumeEvent(), Is.Null);
+        });
+    }
+
+    [Test]
+    public void ConcurrentResetSafetyAndMovementDoNotExposePartialState()
+    {
+        var controller = new AiLaneChangeController(60, 0);
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+
+        Parallel.Invoke(
+            () => Repeat(() =>
+            {
+                controller.Request(Selection(), Cursor(0, 0), Cursor(10, 3), 0, 4);
+                controller.Reset();
+            }, failures),
+            () => Repeat(() =>
+            {
+                controller.UpdateWaiting(AiLaneChangeSafetyStatus.Safe, 0);
+                controller.TryGetDestinationPose(out _);
+            }, failures),
+            () => Repeat(() =>
+            {
+                controller.TryMove(1, 0, out _);
+                controller.ConsumeEvent();
+            }, failures));
+
+        Assert.That(failures, Is.Empty);
+    }
+
+    private static void Repeat(
+        Action action,
+        System.Collections.Concurrent.ConcurrentQueue<Exception> failures)
+    {
+        for (var i = 0; i < 1000; i++)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception exception)
+            {
+                failures.Enqueue(exception);
+            }
+        }
+    }
+
     private static AiPursuitLaneSelection Selection() =>
         new(0, 10, AiLaneChangeDirection.Left,
             new AiRoutePlan(120, [new AiRouteNode(10, 0), new AiRouteNode(99, 120)],

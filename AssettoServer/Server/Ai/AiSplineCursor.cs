@@ -48,5 +48,24 @@ public sealed class AiSplineCursor
         return true;
     }
 
+    public bool CanAdvance(float distanceMeters)
+    {
+        if (!float.IsFinite(distanceMeters) || distanceMeters < 0)
+            throw new ArgumentOutOfRangeException(nameof(distanceMeters));
+
+        var pointId = PointId;
+        var progress = SegmentProgressMeters + distanceMeters;
+        while (progress > _getSegmentLength(pointId))
+        {
+            progress -= _getSegmentLength(pointId);
+            var next = _getNext(pointId);
+            if (!next.HasValue)
+                return false;
+            pointId = next.Value;
+        }
+
+        return true;
+    }
+
     public AiSplinePose Evaluate() => _evaluate(PointId, SegmentProgressMeters);
 }

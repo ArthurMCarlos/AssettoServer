@@ -32,6 +32,7 @@ public readonly record struct AiLaneChangeSafetyResult(
 public static class AiLaneChangeSafety
 {
     private const float BaseGapMeters = 8;
+    private const float FrontClosingTimeSeconds = 2;
     private const float RearClosingTimeSeconds = 2;
 
     public static AiLaneChangeSafetyResult Evaluate(AiLaneChangeSafetyRequest request)
@@ -52,8 +53,18 @@ public static class AiLaneChangeSafety
             if (MathF.Abs(longitudinal) <= combinedHalfLength)
                 return new AiLaneChangeSafetyResult(AiLaneChangeSafetyStatus.BlockedSide);
 
-            if (longitudinal > 0 && longitudinal < combinedHalfLength + BaseGapMeters)
-                return new AiLaneChangeSafetyResult(AiLaneChangeSafetyStatus.BlockedFront);
+            if (longitudinal > 0)
+            {
+                var obstacleSpeed = Vector3.Dot(obstacle.Velocity, forward);
+                var closingSpeed = request.PoliceSpeed - obstacleSpeed;
+                var frontGap = combinedHalfLength + BaseGapMeters
+                               + Math.Max(0, closingSpeed) * FrontClosingTimeSeconds;
+                if (longitudinal < frontGap)
+                {
+                    return new AiLaneChangeSafetyResult(
+                        AiLaneChangeSafetyStatus.BlockedFront);
+                }
+            }
 
             if (longitudinal < 0)
             {

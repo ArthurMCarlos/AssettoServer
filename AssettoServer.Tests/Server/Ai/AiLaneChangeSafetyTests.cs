@@ -33,12 +33,31 @@ public class AiLaneChangeSafetyTests
             Is.EqualTo(expected));
     }
 
+    [Test]
+    public void BlocksSlowVehicleAheadUsingClosingSpeedGap()
+    {
+        var obstacle = new AiLaneChangeObstacle(
+            new Vector3(40, 0, 0),
+            Vector3.Zero,
+            4);
+
+        Assert.That(AiLaneChangeSafety.Evaluate(Request(
+                policeSpeed: 50,
+                obstacle)).Status,
+            Is.EqualTo(AiLaneChangeSafetyStatus.BlockedFront));
+    }
+
     private static AiLaneChangeSafetyRequest Request(
+        params AiLaneChangeObstacle[] obstacles) =>
+        Request(20, obstacles);
+
+    private static AiLaneChangeSafetyRequest Request(
+        float policeSpeed,
         params AiLaneChangeObstacle[] obstacles) =>
         new(
             Vector3.Zero,
             Vector3.UnitX,
-            20,
+            policeSpeed,
             4,
             4,
             obstacles);

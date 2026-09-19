@@ -181,6 +181,31 @@ public class AiState
                     options.MaximumRouteDistanceMeters,
                     options.MaximumVisitedNodes),
                 options.RouteGraceMilliseconds));
+        var committedLaneChange = _laneChangeController?.Phase == AiLaneChangePhase.Changing
+                                  && previousNavigation != null;
+        if (committedLaneChange)
+        {
+            navigation = new AiPursuitNavigationResult(
+                AiPursuitNavigationStatus.Active,
+                previousNavigation,
+                AiPursuitRouteUpdateKind.Reused,
+                AiRouteSearchFailure.None,
+                navigation.VisitedNodes,
+                navigation.TargetLocationDiagnostics,
+                navigation.MaximumExploredDistanceMeters,
+                navigation.JunctionEdgesExamined)
+            {
+                TargetPointIds = navigation.TargetPointIds
+            };
+        }
+
+        var currentLaneRouteActive = !committedLaneChange
+                                     && navigation.Status == AiPursuitNavigationStatus.Active;
+        if (currentLaneRouteActive)
+        {
+            _laneChangeController?.CancelWaiting(
+                navigation.State?.Revision ?? previousNavigation?.Revision ?? 0);
+        }
         if (navigation.Status != AiPursuitNavigationStatus.Active
             && options.LaneChange is { Enabled: true } laneChange
             && navigation.TargetPointIds.Count > 0)
@@ -192,6 +217,11 @@ public class AiState
                 new AiRouteSearchLimits(
                     options.MaximumRouteDistanceMeters,
                     options.MaximumVisitedNodes));
+        }
+        if (navigation.Status != AiPursuitNavigationStatus.Active)
+        {
+            _laneChangeController?.CancelWaiting(
+                (previousNavigation?.Revision ?? 0) + 1);
         }
         var searchDiagnostics = AiPursuitControl.CreateSearchDiagnostics(
             navigation,
@@ -256,7 +286,7 @@ public class AiState
             CurrentSplinePointId,
             targetPointIds,
             limits,
-            options.DistanceMeters);
+            options.DistanceMeters + _currentVecProgress);
         if (laneResult.Kind != AiPursuitLaneSelectionKind.Change
             || laneResult.Selection == null)
         {
@@ -277,6 +307,12 @@ public class AiState
         var destinationCursor = CreateSplineCursor(
             selection.ToPointId,
             destinationProgress);
+        if (selection.DistanceToDecisionMeters - destinationProgress < options.DistanceMeters
+            || !sourceCursor.CanAdvance(options.DistanceMeters)
+            || !destinationCursor.CanAdvance(options.DistanceMeters))
+        {
+            return failedNavigation;
+        }
         var now = _sessionManager.ServerTimeMilliseconds;
         var previousStartsAtDestination = previousNavigation?.Plan.Nodes.Count > 0
                                           && previousNavigation.Plan.Nodes[0].PointId
@@ -330,7 +366,7 @@ public class AiState
 
     private AiPursuitLaneChangeDiagnostics? CreateLaneChangeDiagnostics()
     {
-        var laneEvent = _laneChangeController?.Event;
+        var laneEvent = _laneChangeController?.ConsumeEvent();
         return laneEvent == null
             ? null
             : new AiPursuitLaneChangeDiagnostics(
