@@ -126,6 +126,223 @@ public class RealSplineTransitionIntegrationTests
         });
     }
 
+    [Test]
+    [Explicit("Requires POLICE_CHASE_FAST_LANE_AIP pointing to the real Shutoko package")]
+    public void RealShutokoPackageReproducesLateLaneChangeEvaluationGap()
+    {
+        var sourcePath = Environment.GetEnvironmentVariable("POLICE_CHASE_FAST_LANE_AIP");
+        Assert.That(sourcePath, Is.Not.Null.And.Not.Empty);
+        Assert.That(File.Exists(sourcePath), Is.True, sourcePath);
+
+        using var fixture = AipFixture.FromExisting(sourcePath!);
+        using var spline = fixture.Load("shuto_revival_project_beta_ptb");
+        var planner = new AiRoutePlanner(spline);
+        var selector = new AiPursuitLaneSelector(spline, planner);
+        var limits = new AiRouteSearchLimits(20_000, 50_000);
+        var scenario = FindMaskedLaneChangeScenario(spline, planner, limits);
+        Assert.That(scenario, Is.Not.Null,
+            "Expected a real junction where P0.6 fallback targets mask lane preparation");
+
+        var target = spline.Points[scenario!.TargetPointId];
+        var navigator = new AiPursuitNavigator(
+            planner,
+            new AiPursuitTargetLocator(spline));
+        var navigation = navigator.Update(
+            scenario.SourcePointId,
+            target.Position,
+            spline.Operations.GetForwardVector(target.Id) * 20,
+            49,
+            0,
+            null,
+            new AiPursuitNavigationOptions(limits, 2000));
+        var currentDecision = selector.Select(
+            scenario.SourcePointId,
+            navigation.TargetPointIds.ToHashSet(),
+            limits,
+            60,
+            1000);
+        var physicalTargetDecision = selector.Select(
+            scenario.SourcePointId,
+            new HashSet<int> { scenario.TargetPointId },
+            limits,
+            60,
+            1000);
+        var controller = new AiLaneChangeController(60, 3000);
+        var pipeline = new AiPursuitLaneChangePipeline(
+            selector,
+            controller,
+            (pointId, progress) => CreateCursor(spline, pointId, progress),
+            pointId => GetSegmentLength(spline, pointId));
+        var preparation = pipeline.Evaluate(
+            scenario.SourcePointId,
+            0,
+            GetSegmentLength(spline, scenario.SourcePointId),
+            navigation,
+            null,
+            new AiPursuitLaneChangeOptions(true, 60, 3000, 1000),
+            limits,
+            0);
+
+        TestContext.Progress.WriteLine(
+            $"source={scenario.SourcePointId} destination={scenario.DestinationPointId} " +
+            $"target={scenario.TargetPointId} junction={scenario.JunctionId} " +
+            $"navigatorTarget={navigation.State?.TargetPointId} " +
+            $"candidateCount={navigation.TargetPointIds.Count} " +
+            $"spatial=[{string.Join(',', navigation.TargetLocationDiagnostics.SpatialPointIds)}] " +
+            $"equivalents=[{string.Join(',', navigation.TargetLocationDiagnostics.LaneEquivalentPointIds)}]");
+        Assert.Multiple(() =>
+        {
+            Assert.That(navigation.Status, Is.EqualTo(AiPursuitNavigationStatus.Active));
+            Assert.That(scenario.SourcePointId, Is.EqualTo(312936));
+            Assert.That(scenario.TargetPointId, Is.EqualTo(311797));
+            Assert.That(scenario.JunctionId, Is.EqualTo(2));
+            Assert.That(navigation.State!.TargetPointId, Is.EqualTo(313071));
+            Assert.That(navigation.PreferredPhysicalTargetPointId, Is.EqualTo(311797));
+            Assert.That(currentDecision.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Stay),
+                "P0.6 lane equivalents keep a fallback route active on the current lane");
+            Assert.That(physicalTargetDecision.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Change),
+                "The same position has a junction route through the immediate adjacent lane");
+            Assert.That(physicalTargetDecision.Selection!.DestinationPlan.JunctionDecisions,
+                Contains.Key(scenario.JunctionId));
+            Assert.That(preparation.RequestPrepared, Is.True);
+            Assert.That(preparation.Evaluation.Selection!.JunctionId,
+                Is.EqualTo(scenario.JunctionId));
+            Assert.That(controller.Phase, Is.EqualTo(AiLaneChangePhase.WaitingForGap));
+        });
+    }
+
+    [Test]
+    [Explicit("Requires POLICE_CHASE_FAST_LANE_AIP pointing to the real Shutoko package")]
+    public void DiagnoseRealServerFailureRegion171751()
+    {
+        var sourcePath = Environment.GetEnvironmentVariable("POLICE_CHASE_FAST_LANE_AIP");
+        Assert.That(sourcePath, Is.Not.Null.And.Not.Empty);
+        using var fixture = AipFixture.FromExisting(sourcePath!);
+        using var spline = fixture.Load("shuto_revival_project_beta_ptb");
+        var planner = new AiRoutePlanner(spline);
+        var limits = new AiRouteSearchLimits(20_000, 50_000);
+        var targetIds = spline.GetLanes(171780).ToArray();
+
+        foreach (var pointId in new[] { 171751, 171772, 171780 })
+        {
+            ref readonly var point = ref spline.Points[pointId];
+            var route = planner.TryPlan(pointId, targetIds.ToHashSet(), limits);
+            TestContext.Progress.WriteLine(
+                $"point={pointId} previous={point.PreviousId} next={point.NextId} " +
+                $"left={point.LeftId} right={point.RightId} junctionStart={point.JunctionStartId} " +
+                $"junctionEnd={point.JunctionEndId} lanes=[{string.Join(',', spline.GetLanes(pointId).ToArray())}] " +
+                $"route={(route.Plan == null ? route.Failure : route.Plan.DistanceMeters)} " +
+                $"visited={route.VisitedNodes} junctionEdges={route.JunctionEdgesExamined}");
+        }
+
+        var cursor = 171751;
+        var travelled = 0.0f;
+        for (var i = 0; i < 20_000 && cursor >= 0 && travelled < 20_000; i++)
+        {
+            ref readonly var point = ref spline.Points[cursor];
+            if (point.JunctionStartId >= 0)
+            {
+                ref readonly var junction = ref spline.Junctions[point.JunctionStartId];
+                TestContext.Progress.WriteLine(
+                    $"forwardJunction={junction.Id} start={junction.StartPointId} " +
+                    $"end={junction.EndPointId} distance={travelled:0.0}");
+            }
+            if (point.NextId < 0)
+                break;
+            travelled += Vector3.Distance(point.Position, spline.Points[point.NextId].Position);
+            cursor = point.NextId;
+        }
+
+        var retainedTargetRoute = planner.TryPlan(171751, targetIds.ToHashSet(), limits);
+        Assert.Multiple(() =>
+        {
+            Assert.That(retainedTargetRoute.Plan, Is.Not.Null);
+            Assert.That(retainedTargetRoute.Plan!.DistanceMeters, Is.LessThan(100));
+            Assert.That(retainedTargetRoute.Plan.JunctionDecisions, Is.Empty);
+        });
+    }
+
+    private static LaneChangeScenario? FindMaskedLaneChangeScenario(
+        AiSpline spline,
+        AiRoutePlanner planner,
+        AiRouteSearchLimits limits)
+    {
+        var selector = new AiPursuitLaneSelector(spline, planner);
+        var navigator = new AiPursuitNavigator(
+            planner,
+            new AiPursuitTargetLocator(spline));
+
+        foreach (ref readonly var junction in spline.Junctions)
+        {
+            var targetPointId = Advance(spline, junction.EndPointId, 150);
+            var destinationPointId = junction.StartPointId;
+            var distanceBeforeDecision = 0.0f;
+            while (destinationPointId >= 0 && distanceBeforeDecision <= 250)
+            {
+                ref readonly var destination = ref spline.Points[destinationPointId];
+                if (distanceBeforeDecision >= 60)
+                {
+                    foreach (var sourcePointId in new[] { destination.LeftId, destination.RightId })
+                    {
+                        if (sourcePointId < 0
+                            || !spline.Operations.IsSameDirection(sourcePointId, destinationPointId))
+                        {
+                            continue;
+                        }
+
+                        var exactTargets = new HashSet<int> { targetPointId };
+                        if (planner.TryPlan(destinationPointId, exactTargets, limits).Plan == null
+                            || planner.TryPlan(sourcePointId, exactTargets, limits).Plan != null)
+                        {
+                            continue;
+                        }
+
+                        var target = spline.Points[targetPointId];
+                        var navigation = navigator.Update(
+                            sourcePointId,
+                            target.Position,
+                            spline.Operations.GetForwardVector(targetPointId) * 20,
+                            49,
+                            0,
+                            null,
+                            new AiPursuitNavigationOptions(limits, 2000));
+                        if (navigation.Status != AiPursuitNavigationStatus.Active)
+                            continue;
+
+                        var currentDecision = selector.Select(
+                            sourcePointId,
+                            navigation.TargetPointIds.ToHashSet(),
+                            limits,
+                            60);
+                        var physicalDecision = selector.Select(
+                            sourcePointId,
+                            exactTargets,
+                            limits,
+                            60);
+                        if (currentDecision.Kind == AiPursuitLaneSelectionKind.Stay
+                            && physicalDecision.Kind == AiPursuitLaneSelectionKind.Change)
+                        {
+                            return new LaneChangeScenario(
+                                sourcePointId,
+                                destinationPointId,
+                                targetPointId,
+                                junction.Id);
+                        }
+                    }
+                }
+
+                if (destination.PreviousId < 0)
+                    break;
+                distanceBeforeDecision += Vector3.Distance(
+                    destination.Position,
+                    spline.Points[destination.PreviousId].Position);
+                destinationPointId = destination.PreviousId;
+            }
+        }
+
+        return null;
+    }
+
     private static LaneChangeScenario? FindLaneChangeScenario(
         AiSpline spline,
         AiRoutePlanner planner,
@@ -188,6 +405,31 @@ public class RealSplineTransitionIntegrationTests
         }
 
         return pointId;
+    }
+
+    private static AiSplineCursor CreateCursor(
+        AiSpline spline,
+        int pointId,
+        float progress) =>
+        new(
+            pointId,
+            progress,
+            current => spline.Points[current].NextId >= 0
+                ? spline.Points[current].NextId
+                : null,
+            current => GetSegmentLength(spline, current),
+            (current, _) => new AiSplinePose(
+                spline.Points[current].Position,
+                spline.Operations.GetForwardVector(current)));
+
+    private static float GetSegmentLength(AiSpline spline, int pointId)
+    {
+        var nextPointId = spline.Points[pointId].NextId;
+        return nextPointId < 0
+            ? 0
+            : Vector3.Distance(
+                spline.Points[pointId].Position,
+                spline.Points[nextPointId].Position);
     }
 
     private sealed record LaneChangeScenario(
