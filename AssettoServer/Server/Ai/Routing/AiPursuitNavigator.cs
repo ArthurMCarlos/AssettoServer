@@ -32,7 +32,10 @@ public sealed record AiPursuitRouteState(
     int TargetPointId,
     AiRoutePlan Plan,
     long Revision,
-    long? FirstFailureMilliseconds);
+    long? FirstFailureMilliseconds)
+{
+    public int? PreferredPhysicalTargetPointId { get; init; }
+}
 
 public sealed record AiPursuitNavigationResult(
     AiPursuitNavigationStatus Status,
@@ -45,6 +48,7 @@ public sealed record AiPursuitNavigationResult(
     int JunctionEdgesExamined)
 {
     public IReadOnlyList<int> TargetPointIds { get; init; } = [];
+    public int? PreferredPhysicalTargetPointId { get; init; }
 }
 
 public sealed class AiPursuitNavigator
@@ -73,6 +77,8 @@ public sealed class AiPursuitNavigator
                     maximumCandidates);
                 return new AiPursuitTargetLocationResult(
                     candidates,
+                    candidates,
+                    candidates.Count > 0 ? candidates[0].PointId : null,
                     new AiPursuitTargetLocationDiagnostics(
                         candidates.Select(candidate => candidate.PointId).ToArray(),
                         [],
@@ -109,6 +115,9 @@ public sealed class AiPursuitNavigator
         var targetPointIds = location.Candidates
             .Select(candidate => candidate.PointId)
             .ToHashSet();
+        var preferredPhysicalTargetPointId = SelectPreferredPhysicalTarget(
+            location,
+            previous?.PreferredPhysicalTargetPointId);
 
         if (targetPointIds.Count == 0)
         {
@@ -120,7 +129,7 @@ public sealed class AiPursuitNavigator
                 0,
                 location.Diagnostics,
                 0,
-                0), targetPointIds);
+                0), targetPointIds, preferredPhysicalTargetPointId);
         }
 
         if (previous != null
@@ -132,7 +141,7 @@ public sealed class AiPursuitNavigator
                     previous,
                     remainingPlan,
                     previous.TargetPointId,
-                    location.Diagnostics), targetPointIds);
+                    location.Diagnostics), targetPointIds, preferredPhysicalTargetPointId);
             }
 
             var extensionLimits = new AiRouteSearchLimits(
@@ -153,7 +162,7 @@ public sealed class AiPursuitNavigator
                         ? AiPursuitRouteUpdateKind.Recovered
                         : AiPursuitRouteUpdateKind.Extended,
                     extension,
-                    location.Diagnostics), targetPointIds);
+                    location.Diagnostics), targetPointIds, preferredPhysicalTargetPointId);
             }
         }
 
@@ -170,7 +179,7 @@ public sealed class AiPursuitNavigator
                         ? AiPursuitRouteUpdateKind.Recovered
                         : AiPursuitRouteUpdateKind.Recalculated,
                 route,
-                location.Diagnostics), targetPointIds);
+                location.Diagnostics), targetPointIds, preferredPhysicalTargetPointId);
         }
 
         return AttachTargets(HandleFailure(
@@ -181,13 +190,53 @@ public sealed class AiPursuitNavigator
             route.VisitedNodes,
             location.Diagnostics,
             route.MaximumExploredDistanceMeters,
-            route.JunctionEdgesExamined), targetPointIds);
+            route.JunctionEdgesExamined), targetPointIds, preferredPhysicalTargetPointId);
     }
 
     private static AiPursuitNavigationResult AttachTargets(
         AiPursuitNavigationResult result,
-        IReadOnlySet<int> targetPointIds) =>
-        result with { TargetPointIds = targetPointIds.OrderBy(id => id).ToArray() };
+        IReadOnlySet<int> targetPointIds,
+        int? preferredPhysicalTargetPointId) =>
+        result with
+        {
+            State = result.State == null
+                ? null
+                : result.State with
+                {
+                    PreferredPhysicalTargetPointId = preferredPhysicalTargetPointId
+                },
+            TargetPointIds = targetPointIds.OrderBy(id => id).ToArray(),
+            PreferredPhysicalTargetPointId = preferredPhysicalTargetPointId
+        };
+
+    private static int? SelectPreferredPhysicalTarget(
+        AiPursuitTargetLocationResult location,
+        int? previousPointId)
+    {
+        if (location.AcceptedSpatialCandidates.Count == 0)
+            return null;
+        var current = location.AcceptedSpatialCandidates[0];
+        if (!previousPointId.HasValue)
+            return current.PointId;
+
+        AiPursuitTargetCandidate? previous = null;
+        foreach (var candidate in location.AcceptedSpatialCandidates)
+        {
+            if (candidate.PointId == previousPointId.Value)
+            {
+                previous = candidate;
+                break;
+            }
+        }
+        if (!previous.HasValue)
+            return current.PointId;
+
+        const float retentionMeters = 1.0f;
+        return MathF.Sqrt(previous.Value.DistanceSquared)
+               <= MathF.Sqrt(current.DistanceSquared) + retentionMeters
+            ? previous.Value.PointId
+            : current.PointId;
+    }
 
     private static AiPursuitNavigationResult ActiveFromCache(
         AiPursuitRouteState previous,

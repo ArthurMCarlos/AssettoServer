@@ -40,6 +40,79 @@ public class AiPursuitNavigatorTests
     }
 
     [Test]
+    public void KeepsPhysicalAnchorWhenEquivalentFallbackIsSelected()
+    {
+        var planner = new AiRoutePlanner(new AiRouteGraph(
+            new Dictionary<int, AiRouteEdge[]>
+            {
+                [0] = [new(10, 25, null, null)],
+                [10] = [],
+                [20] = []
+            }));
+        var locator = new AiPursuitTargetLocator(
+            (_, _) => [Source(20, 1)],
+            (pointId, _) => pointId == 20 ? [Source(10, 9)] : []);
+        var navigator = new AiPursuitNavigator(planner, locator);
+
+        var result = Update(navigator, policePointId: 0, nowMilliseconds: 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(AiPursuitNavigationStatus.Active));
+            Assert.That(result.State!.TargetPointId, Is.EqualTo(10));
+            Assert.That(result.PreferredPhysicalTargetPointId, Is.EqualTo(20));
+            Assert.That(result.State.PreferredPhysicalTargetPointId, Is.EqualTo(20));
+        });
+    }
+
+    [Test]
+    public void RetainsPreviousPhysicalAnchorWithinOneMeterTolerance()
+    {
+        AiPursuitTargetCandidateSource[] sources =
+        [
+            Source(20, 1.00f),
+            Source(30, 1.21f)
+        ];
+        var navigator = CreateNavigator(new Dictionary<int, AiRouteEdge[]>
+        {
+            [0] = [new(20, 10, null, null), new(30, 10, null, null)],
+            [20] = [],
+            [30] = []
+        }, () => sources);
+        var initial = Update(navigator, policePointId: 0, nowMilliseconds: 0);
+        sources =
+        [
+            Source(30, 1.00f),
+            Source(20, 2.25f)
+        ];
+
+        var updated = navigator.Update(
+            0,
+            Vector3.Zero,
+            Vector3.Zero,
+            49,
+            200,
+            initial.State,
+            Options());
+
+        Assert.That(updated.PreferredPhysicalTargetPointId, Is.EqualTo(20));
+    }
+
+    [Test]
+    public void AcceptsSplinePointZeroAsPhysicalAnchor()
+    {
+        var navigator = CreateNavigator(new Dictionary<int, AiRouteEdge[]>
+        {
+            [5] = [new(0, 10, null, null)],
+            [0] = []
+        }, () => [Source(0, 0)]);
+
+        var result = Update(navigator, policePointId: 5, nowMilliseconds: 0);
+
+        Assert.That(result.PreferredPhysicalTargetPointId, Is.Zero);
+    }
+
+    [Test]
     public void PlansAcrossMultipleJunctions()
     {
         var navigator = CreateNavigator(new Dictionary<int, AiRouteEdge[]>

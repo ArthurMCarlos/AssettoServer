@@ -35,6 +35,8 @@ public sealed record AiPursuitTargetLocationDiagnostics(
 
 public sealed record AiPursuitTargetLocationResult(
     IReadOnlyList<AiPursuitTargetCandidate> Candidates,
+    IReadOnlyList<AiPursuitTargetCandidate> AcceptedSpatialCandidates,
+    int? PreferredPhysicalTargetPointId,
     AiPursuitTargetLocationDiagnostics Diagnostics);
 
 public sealed class AiPursuitTargetLocator
@@ -125,6 +127,7 @@ public sealed class AiPursuitTargetLocator
             .Take(maximumCandidates)
             .ToArray();
         var candidates = new Dictionary<int, AiPursuitTargetCandidate>();
+        var acceptedSpatialCandidates = new List<AiPursuitTargetCandidate>();
 
         foreach (var spatialSource in orderedSpatialSources)
         {
@@ -138,6 +141,7 @@ public sealed class AiPursuitTargetLocator
                     out var spatialRejection))
             {
                 candidates.TryAdd(spatialCandidate.PointId, spatialCandidate);
+                acceptedSpatialCandidates.Add(spatialCandidate);
             }
             else
             {
@@ -174,6 +178,10 @@ public sealed class AiPursuitTargetLocator
             .ToArray();
         return new AiPursuitTargetLocationResult(
             orderedCandidates,
+            acceptedSpatialCandidates,
+            acceptedSpatialCandidates.Count > 0
+                ? acceptedSpatialCandidates[0].PointId
+                : null,
             new AiPursuitTargetLocationDiagnostics(
                 spatialPointIds,
                 laneEquivalentPointIds.Distinct().ToArray(),

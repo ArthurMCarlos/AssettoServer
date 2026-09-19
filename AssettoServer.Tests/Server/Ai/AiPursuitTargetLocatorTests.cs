@@ -101,6 +101,34 @@ public class AiPursuitTargetLocatorTests
     }
 
     [Test]
+    public void KeepsPhysicalAnchorSeparateFromLaneEquivalentCandidates()
+    {
+        var locator = new AiPursuitTargetLocator(
+            (_, _) =>
+            [
+                new AiPursuitTargetCandidateSource(20, 1, Vector3.UnitX)
+            ],
+            (pointId, _) => pointId == 20
+                ? [new AiPursuitTargetCandidateSource(10, 9, Vector3.UnitX)]
+                : []);
+
+        var result = locator.LocateCandidates(
+            Vector3.Zero,
+            Vector3.Zero,
+            maximumDistanceSquared: 100,
+            maximumCandidates: 8);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.PreferredPhysicalTargetPointId, Is.EqualTo(20));
+            Assert.That(result.AcceptedSpatialCandidates.Select(candidate => candidate.PointId),
+                Is.EqualTo(new[] { 20 }));
+            Assert.That(result.Candidates.Select(candidate => candidate.PointId),
+                Is.EquivalentTo(new[] { 20, 10 }));
+        });
+    }
+
+    [Test]
     public void ReportsSpatialLaneAndRejectedCandidates()
     {
         var locator = new AiPursuitTargetLocator(
