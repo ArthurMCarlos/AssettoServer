@@ -25,6 +25,89 @@ public class AiPursuitLaneDiagnosticsTests
     }
 
     [Test]
+    public void MotivationChangeRepublishesEvaluationWithoutDistanceSpam()
+    {
+        var tracker = new AiPursuitLaneDiagnosticTracker();
+        tracker.PublishEvaluation(0, 99, 4, Evaluation(
+            500, motivation: AiPursuitLaneMotivation.TargetLaneAlignment));
+
+        var duplicate = tracker.PublishEvaluation(0, 99, 4, Evaluation(
+            498, motivation: AiPursuitLaneMotivation.TargetLaneAlignment));
+        var changed = tracker.PublishEvaluation(0, 99, 4, Evaluation(
+            498, motivation: AiPursuitLaneMotivation.FutureJunction));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(duplicate, Is.Null);
+            Assert.That(changed, Is.Not.Null);
+            Assert.That(changed!.Motivation,
+                Is.EqualTo(AiPursuitLaneMotivation.FutureJunction));
+        });
+    }
+
+    [Test]
+    public void DirectAlignmentDiagnosticHasNoJunctionButKeepsRouteEvidence()
+    {
+        var diagnostic = new AiPursuitLaneDiagnosticTracker().PublishEvaluation(
+            171761,
+            283943,
+            1,
+            Evaluation(
+                94.6f,
+                junctionId: null,
+                motivation: AiPursuitLaneMotivation.TargetLaneAlignment,
+                relation: AiPursuitLanePhysicalRelation.ImmediateLeft));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(diagnostic!.JunctionId, Is.Null);
+            Assert.That(diagnostic.Motivation,
+                Is.EqualTo(AiPursuitLaneMotivation.TargetLaneAlignment));
+            Assert.That(diagnostic.PhysicalRelation,
+                Is.EqualTo(AiPursuitLanePhysicalRelation.ImmediateLeft));
+            Assert.That(diagnostic.CandidateLaneRoutes.Single().RouteDistanceMeters,
+                Is.EqualTo(600));
+        });
+    }
+
+    [Test]
+    public void PhysicalRelationChangeRepublishesEvaluation()
+    {
+        var tracker = new AiPursuitLaneDiagnosticTracker();
+        tracker.PublishEvaluation(0, 99, 4, Evaluation(
+            500, relation: AiPursuitLanePhysicalRelation.ImmediateLeft));
+
+        var changed = tracker.PublishEvaluation(0, 99, 4, Evaluation(
+            498, relation: AiPursuitLanePhysicalRelation.ImmediateRight));
+
+        Assert.That(changed!.PhysicalRelation,
+            Is.EqualTo(AiPursuitLanePhysicalRelation.ImmediateRight));
+    }
+
+    [TestCase(
+        AiPursuitLaneEvaluationReason.NonAdjacent,
+        AiPursuitLaneChangeDiagnosticReason.NonAdjacent)]
+    [TestCase(
+        AiPursuitLaneEvaluationReason.InvalidGeometry,
+        AiPursuitLaneChangeDiagnosticReason.InvalidGeometry)]
+    public void GeometryRejectionUsesPublicDiagnosticReason(
+        AiPursuitLaneEvaluationReason evaluationReason,
+        AiPursuitLaneChangeDiagnosticReason expectedReason)
+    {
+        var evaluation = Evaluation(500) with
+        {
+            Kind = AiPursuitLaneSelectionKind.Unreachable,
+            Selection = null,
+            Reason = evaluationReason
+        };
+
+        var diagnostic = new AiPursuitLaneDiagnosticTracker().PublishEvaluation(
+            0, 99, 4, evaluation);
+
+        Assert.That(diagnostic!.Reason, Is.EqualTo(expectedReason));
+    }
+
+    [Test]
     public void ChangedJunctionPublishesNewSemanticEvaluation()
     {
         var tracker = new AiPursuitLaneDiagnosticTracker();
@@ -106,7 +189,9 @@ public class AiPursuitLaneDiagnosticsTests
 
     private static AiPursuitLaneSelectionResult Evaluation(
         float distanceToDecision,
-        int junctionId = 2)
+        int? junctionId = 2,
+        AiPursuitLaneMotivation motivation = AiPursuitLaneMotivation.FutureJunction,
+        AiPursuitLanePhysicalRelation relation = AiPursuitLanePhysicalRelation.ImmediateLeft)
     {
         var current = new AiPursuitLaneRouteDiagnostic(
             0,
@@ -131,7 +216,9 @@ public class AiPursuitLaneDiagnosticsTests
         var plan = new AiRoutePlan(
             600,
             [new AiRouteNode(10, 0), new AiRouteNode(99, 600)],
-            new Dictionary<int, bool> { [junctionId] = true });
+            junctionId.HasValue
+                ? new Dictionary<int, bool> { [junctionId.Value] = true }
+                : new Dictionary<int, bool>());
         return new AiPursuitLaneSelectionResult(
             AiPursuitLaneSelectionKind.Change,
             new AiPursuitLaneSelection(
@@ -141,7 +228,9 @@ public class AiPursuitLaneDiagnosticsTests
                 plan,
                 distanceToDecision)
             {
-                JunctionId = junctionId
+                JunctionId = junctionId,
+                Motivation = motivation,
+                PhysicalRelation = relation
             },
             [new AiPursuitLaneCandidateDiagnostic(10, AiLaneChangeDirection.Left, null)])
         {

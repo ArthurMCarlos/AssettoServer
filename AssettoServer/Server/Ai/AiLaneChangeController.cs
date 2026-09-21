@@ -42,6 +42,8 @@ public sealed record AiLaneChangeEvent(
     AiLaneChangeSafetyStatus? SafetyStatus)
 {
     public int? JunctionId { get; init; }
+    public AiPursuitLaneMotivation Motivation { get; init; }
+    public AiPursuitLanePhysicalRelation PhysicalRelation { get; init; }
 }
 
 public readonly record struct AiLaneChangeMovement(
@@ -354,7 +356,9 @@ public sealed class AiLaneChangeController
                              ? selection.DestinationPlan.JunctionDecisions.Keys
                                  .OrderBy(id => id)
                                  .First()
-                             : null)
+                             : null),
+            Motivation = selection.Motivation,
+            PhysicalRelation = selection.PhysicalRelation
         };
         _events.Enqueue(_event);
     }

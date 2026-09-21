@@ -349,6 +349,8 @@ public class AiState
                 PolicePointId = CurrentSplinePointId,
                 PreferredPhysicalTargetPointId = preferredPhysicalTargetPointId,
                 JunctionId = laneEvent.JunctionId,
+                Motivation = laneEvent.Motivation,
+                PhysicalRelation = laneEvent.PhysicalRelation,
                 SafetyStatus = laneEvent.SafetyStatus
             };
     }

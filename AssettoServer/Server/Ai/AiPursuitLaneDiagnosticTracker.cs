@@ -28,6 +28,8 @@ public sealed class AiPursuitLaneDiagnosticTracker
             selection?.ToPointId ?? candidate?.PointId,
             selection?.Direction ?? candidate?.Direction,
             selection?.JunctionId ?? candidate?.JunctionId,
+            selection?.Motivation,
+            selection?.PhysicalRelation ?? candidate?.PhysicalRelation,
             null,
             AiPursuitLaneChangeEventKind.Evaluated,
             CreateCandidateEvidence(evaluation));
@@ -48,6 +50,8 @@ public sealed class AiPursuitLaneDiagnosticTracker
             PolicePointId = policePointId,
             PreferredPhysicalTargetPointId = preferredPhysicalTargetPointId,
             JunctionId = selection?.JunctionId ?? candidate?.JunctionId,
+            Motivation = selection?.Motivation,
+            PhysicalRelation = selection?.PhysicalRelation ?? candidate?.PhysicalRelation,
             CurrentLaneRoute = evaluation.CurrentLaneRoute,
             CandidateLaneRoutes = evaluation.CandidateLaneRoutes
         };
@@ -68,6 +72,8 @@ public sealed class AiPursuitLaneDiagnosticTracker
         var key = new SemanticKey(
             reason,
             preferredPhysicalTargetPointId,
+            null,
+            null,
             null,
             null,
             null,
@@ -107,8 +113,12 @@ public sealed class AiPursuitLaneDiagnosticTracker
                 AiPursuitLaneChangeDiagnosticReason.CurrentLaneValid,
             AiPursuitLaneEvaluationReason.NoAdjacentLane =>
                 AiPursuitLaneChangeDiagnosticReason.NoAdjacentLane,
+            AiPursuitLaneEvaluationReason.NonAdjacent =>
+                AiPursuitLaneChangeDiagnosticReason.NonAdjacent,
             AiPursuitLaneEvaluationReason.OppositeDirection =>
                 AiPursuitLaneChangeDiagnosticReason.OppositeDirection,
+            AiPursuitLaneEvaluationReason.InvalidGeometry =>
+                AiPursuitLaneChangeDiagnosticReason.InvalidGeometry,
             AiPursuitLaneEvaluationReason.NoForwardRoute =>
                 AiPursuitLaneChangeDiagnosticReason.NoForwardRoute,
             AiPursuitLaneEvaluationReason.NoRealJunction =>
@@ -131,7 +141,7 @@ public sealed class AiPursuitLaneDiagnosticTracker
             .ThenBy(candidate => candidate.PointId)
             .Select(candidate =>
                 $"{candidate.PointId}:{candidate.Direction}:{candidate.SearchFailure}:" +
-                $"{candidate.JunctionId}:{candidate.Reason}"));
+                $"{candidate.JunctionId}:{candidate.Reason}:{candidate.PhysicalRelation}"));
 
     private sealed record SemanticKey(
         AiPursuitLaneChangeDiagnosticReason Reason,
@@ -140,6 +150,8 @@ public sealed class AiPursuitLaneDiagnosticTracker
         int? ToPointId,
         AiLaneChangeDirection? Direction,
         int? JunctionId,
+        AiPursuitLaneMotivation? Motivation,
+        AiPursuitLanePhysicalRelation? PhysicalRelation,
         AiLaneChangeSafetyStatus? SafetyStatus,
         AiPursuitLaneChangeEventKind EventKind,
         string CandidateEvidence = "");

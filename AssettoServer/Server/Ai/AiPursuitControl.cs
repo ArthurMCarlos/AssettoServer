@@ -75,6 +75,8 @@ public sealed record AiPursuitLaneChangeDiagnostics(
     public int PolicePointId { get; init; }
     public int? PreferredPhysicalTargetPointId { get; init; }
     public int? JunctionId { get; init; }
+    public AiPursuitLaneMotivation? Motivation { get; init; }
+    public AiPursuitLanePhysicalRelation? PhysicalRelation { get; init; }
     public AiPursuitLaneRouteDiagnostic? CurrentLaneRoute { get; init; }
     public IReadOnlyList<AiPursuitLaneRouteDiagnostic> CandidateLaneRoutes { get; init; } = [];
     public AiLaneChangeSafetyStatus? SafetyStatus { get; init; }
