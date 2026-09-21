@@ -63,7 +63,7 @@ internal sealed class AiPursuitLaneChangePipeline
         {
             navigation.PreferredPhysicalTargetPointId.Value
         };
-        var routePreparation = _selector.Select(
+        var routePreparation = _selector.SelectForRoutePreparation(
             currentPointId,
             physicalTargets,
             limits,
@@ -75,9 +75,7 @@ internal sealed class AiPursuitLaneChangePipeline
             limits,
             options.DistanceMeters,
             options.LookaheadMeters);
-        var evaluation = routePreparation.Kind == AiPursuitLaneSelectionKind.Change
-            ? routePreparation
-            : alignment;
+        var evaluation = SelectPriority(routePreparation, alignment);
         if (evaluation.Kind != AiPursuitLaneSelectionKind.Change
             || evaluation.Selection == null)
         {
@@ -136,6 +134,21 @@ internal sealed class AiPursuitLaneChangePipeline
             requestPrepared,
             _controller.Phase,
             _controller.Event);
+
+    private static AiPursuitLaneSelectionResult SelectPriority(
+        AiPursuitLaneSelectionResult routePreparation,
+        AiPursuitLaneSelectionResult alignment)
+    {
+        if (routePreparation.Kind == AiPursuitLaneSelectionKind.Change)
+            return routePreparation;
+        if (alignment.Kind == AiPursuitLaneSelectionKind.Change)
+            return alignment;
+
+        return alignment.CandidateLaneRoutes.Count > 0
+            || alignment.Candidates.Count > 0
+            ? alignment
+            : routePreparation;
+    }
 
     private static AiPursuitNavigationResult CreateEffectiveNavigation(
         AiPursuitNavigationResult navigation,

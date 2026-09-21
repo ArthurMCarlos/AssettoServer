@@ -99,6 +99,39 @@ public class AiPursuitNavigatorTests
     }
 
     [Test]
+    public void ReleasesPreviousPhysicalAnchorOutsideOneMeterTolerance()
+    {
+        AiPursuitTargetCandidateSource[] sources =
+        [
+            Source(20, 1.00f),
+            Source(30, 1.21f)
+        ];
+        var navigator = CreateNavigator(new Dictionary<int, AiRouteEdge[]>
+        {
+            [0] = [new(20, 10, null, null), new(30, 10, null, null)],
+            [20] = [],
+            [30] = []
+        }, () => sources);
+        var initial = Update(navigator, policePointId: 0, nowMilliseconds: 0);
+        sources =
+        [
+            Source(30, 1.00f),
+            Source(20, 4.41f)
+        ];
+
+        var updated = navigator.Update(
+            0,
+            Vector3.Zero,
+            Vector3.Zero,
+            49,
+            200,
+            initial.State,
+            Options());
+
+        Assert.That(updated.PreferredPhysicalTargetPointId, Is.EqualTo(30));
+    }
+
+    [Test]
     public void AcceptsSplinePointZeroAsPhysicalAnchor()
     {
         var navigator = CreateNavigator(new Dictionary<int, AiRouteEdge[]>
