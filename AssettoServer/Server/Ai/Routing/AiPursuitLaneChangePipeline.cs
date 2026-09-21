@@ -63,12 +63,21 @@ internal sealed class AiPursuitLaneChangePipeline
         {
             navigation.PreferredPhysicalTargetPointId.Value
         };
-        var evaluation = _selector.Select(
+        var routePreparation = _selector.Select(
             currentPointId,
             physicalTargets,
             limits,
             options.DistanceMeters,
             options.LookaheadMeters);
+        var alignment = _selector.SelectForAlignment(
+            currentPointId,
+            physicalTargets,
+            limits,
+            options.DistanceMeters,
+            options.LookaheadMeters);
+        var evaluation = routePreparation.Kind == AiPursuitLaneSelectionKind.Change
+            ? routePreparation
+            : alignment;
         if (evaluation.Kind != AiPursuitLaneSelectionKind.Change
             || evaluation.Selection == null)
         {

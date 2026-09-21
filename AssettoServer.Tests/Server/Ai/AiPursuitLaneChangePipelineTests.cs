@@ -39,7 +39,7 @@ public class AiPursuitLaneChangePipelineTests
     }
 
     [Test]
-    public void CurrentLaneValidDoesNotPrepareRequest()
+    public void ShorterAdjacentTargetLanePreparesRequestWhenCurrentRouteIsValid()
     {
         var controller = new AiLaneChangeController(60, 3000);
         var pipeline = CreatePipeline(controller, currentReachesPhysicalTarget: true);
@@ -52,10 +52,10 @@ public class AiPursuitLaneChangePipelineTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.RequestPrepared, Is.False);
-            Assert.That(result.Evaluation.Reason,
-                Is.EqualTo(AiPursuitLaneEvaluationReason.CurrentLaneValid));
-            Assert.That(result.ControllerPhase, Is.EqualTo(AiLaneChangePhase.None));
+            Assert.That(result.RequestPrepared, Is.True);
+            Assert.That(result.Evaluation.Selection!.Motivation,
+                Is.EqualTo(AiPursuitLaneMotivation.TargetLaneAlignment));
+            Assert.That(result.ControllerPhase, Is.EqualTo(AiLaneChangePhase.WaitingForGap));
         });
     }
 

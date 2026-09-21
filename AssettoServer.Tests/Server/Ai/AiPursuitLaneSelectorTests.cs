@@ -102,6 +102,91 @@ public class AiPursuitLaneSelectorTests
     }
 
     [Test]
+    public void SelectsDirectTargetLaneWithoutJunctionForAlignment()
+    {
+        var selector = CreateSelector(new Dictionary<int, AiRoutePlan?>
+        {
+            [0] = null,
+            [10] = Plan(10, 99, 94.6f),
+            [20] = null
+        });
+
+        var result = selector.SelectForAlignment(0, Targets, Limits, 60, 1000);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Change));
+            Assert.That(result.Selection!.ToPointId, Is.EqualTo(10));
+            Assert.That(result.Selection.JunctionId, Is.Null);
+            Assert.That(result.Selection.DistanceToDecisionMeters, Is.EqualTo(94.6f));
+            Assert.That(result.Selection.Motivation,
+                Is.EqualTo(AiPursuitLaneMotivation.TargetLaneAlignment));
+        });
+    }
+
+    [Test]
+    public void RejectsCandidateWhoseOppositeLinkDoesNotReturnToCurrentPoint()
+    {
+        var selector = new AiPursuitLaneSelector(
+            _ => new AiAdjacentLanePoints(10, -1),
+            (_, _) => true,
+            (_, _, _) => AiPursuitLanePhysicalRelation.NonAdjacent,
+            (start, _, _) => Search(start == 10 ? Plan(10, 99, 120) : null),
+            _ => null);
+
+        var result = selector.SelectForAlignment(0, Targets, Limits, 60, 1000);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Unreachable));
+            Assert.That(result.CandidateLaneRoutes.Single(candidate => candidate.PointId == 10).Reason,
+                Is.EqualTo(AiPursuitLaneEvaluationReason.NonAdjacent));
+        });
+    }
+
+    [Test]
+    public void ReportsImmediatePhysicalRelationForReciprocalNeighbor()
+    {
+        var selector = new AiPursuitLaneSelector(
+            _ => new AiAdjacentLanePoints(10, -1),
+            (_, _) => true,
+            (_, _, _) => AiPursuitLanePhysicalRelation.ImmediateLeft,
+            (start, _, _) => Search(start == 10 ? Plan(10, 99, 120) : null),
+            _ => null);
+
+        var result = selector.SelectForAlignment(0, Targets, Limits, 60, 1000);
+
+        Assert.That(result.Selection!.PhysicalRelation,
+            Is.EqualTo(AiPursuitLanePhysicalRelation.ImmediateLeft));
+    }
+
+    [Test]
+    public void RejectsCandidateWithInvalidPhysicalGeometryBeforePlanningIt()
+    {
+        var requestedStarts = new List<int>();
+        var selector = new AiPursuitLaneSelector(
+            _ => new AiAdjacentLanePoints(10, -1),
+            (_, _) => true,
+            (_, _, _) => AiPursuitLanePhysicalRelation.InvalidGeometry,
+            (start, _, _) =>
+            {
+                requestedStarts.Add(start);
+                return Search(start == 10 ? Plan(10, 99, 120) : null);
+            },
+            _ => null);
+
+        var result = selector.SelectForAlignment(0, Targets, Limits, 60, 1000);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Unreachable));
+            Assert.That(result.CandidateLaneRoutes.Single(candidate => candidate.PointId == 10).Reason,
+                Is.EqualTo(AiPursuitLaneEvaluationReason.InvalidGeometry));
+            Assert.That(requestedStarts, Is.EqualTo(new[] { 0 }));
+        });
+    }
+
+    [Test]
     public void RejectsJunctionBeyondPreparationLookahead()
     {
         var selector = CreateSelector(new Dictionary<int, AiRoutePlan?>
