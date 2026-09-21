@@ -125,6 +125,56 @@ public class AiPursuitLaneSelectorTests
     }
 
     [Test]
+    public void RoutePreparationStillRejectsDirectPlanWithoutJunction()
+    {
+        var selector = CreateSelector(new Dictionary<int, AiRoutePlan?>
+        {
+            [0] = null,
+            [10] = Plan(10, 99, 94.6f),
+            [20] = null
+        });
+
+        var result = selector.SelectForRoutePreparation(0, Targets, Limits, 60, 1000);
+
+        Assert.That(result.Reason, Is.EqualTo(AiPursuitLaneEvaluationReason.NoRealJunction));
+    }
+
+    [Test]
+    public void AlignmentChoosesShorterAdjacentRouteWhenCurrentRouteIsValid()
+    {
+        var selector = CreateSelector(new Dictionary<int, AiRoutePlan?>
+        {
+            [0] = Plan(0, 99, 850),
+            [10] = Plan(10, 99, 94.6f),
+            [20] = null
+        });
+
+        var result = selector.SelectForAlignment(0, Targets, Limits, 60, 1000);
+
+        Assert.That(result.Selection!.ToPointId, Is.EqualTo(10));
+    }
+
+    [Test]
+    public void AlignmentStaysWhenCurrentRouteIsNotLongerThanAdjacentRoute()
+    {
+        var selector = CreateSelector(new Dictionary<int, AiRoutePlan?>
+        {
+            [0] = Plan(0, 99, 90),
+            [10] = Plan(10, 99, 94.6f),
+            [20] = null
+        });
+
+        var result = selector.SelectForAlignment(0, Targets, Limits, 60, 1000);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Stay));
+            Assert.That(result.Selection, Is.Null);
+            Assert.That(result.Reason, Is.EqualTo(AiPursuitLaneEvaluationReason.CurrentLaneValid));
+        });
+    }
+
+    [Test]
     public void RejectsCandidateWhoseOppositeLinkDoesNotReturnToCurrentPoint()
     {
         var selector = new AiPursuitLaneSelector(
@@ -141,6 +191,26 @@ public class AiPursuitLaneSelectorTests
             Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Unreachable));
             Assert.That(result.CandidateLaneRoutes.Single(candidate => candidate.PointId == 10).Reason,
                 Is.EqualTo(AiPursuitLaneEvaluationReason.NonAdjacent));
+        });
+    }
+
+    [Test]
+    public void RoutePreparationRejectsNonReciprocalNeighborEvenWithJunctionRoute()
+    {
+        var selector = new AiPursuitLaneSelector(
+            _ => new AiAdjacentLanePoints(10, -1),
+            (_, _) => true,
+            (_, _, _) => AiPursuitLanePhysicalRelation.NonAdjacent,
+            (start, _, _) => Search(start == 10 ? Plan(10, 99, 120, junctionId: 7) : null),
+            plan => new AiPursuitLaneDecision(7, plan.DistanceMeters));
+
+        var result = selector.SelectForRoutePreparation(0, Targets, Limits, 60, 1000);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Unreachable));
+            Assert.That(result.Candidates.Single(candidate => candidate.PointId == 10).Rejection,
+                Is.EqualTo(AiPursuitLaneRejectionReason.NonAdjacent));
         });
     }
 

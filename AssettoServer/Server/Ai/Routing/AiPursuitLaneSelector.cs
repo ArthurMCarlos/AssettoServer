@@ -282,6 +282,19 @@ public sealed class AiPursuitLaneSelector
             };
     }
 
+    public AiPursuitLaneSelectionResult SelectForRoutePreparation(
+        int currentPointId,
+        IReadOnlySet<int> targetPointIds,
+        AiRouteSearchLimits limits,
+        float maneuverDistanceMeters,
+        float lookaheadMeters) =>
+        Select(
+            currentPointId,
+            targetPointIds,
+            limits,
+            maneuverDistanceMeters,
+            lookaheadMeters);
+
     public AiPursuitLaneSelectionResult SelectForAlignment(
         int currentPointId,
         IReadOnlySet<int> targetPointIds,
@@ -531,6 +544,27 @@ public sealed class AiPursuitLaneSelector
             return;
         }
 
+        var physicalRelation = _getPhysicalRelation(currentPointId, adjacentPointId, direction);
+        if (physicalRelation is AiPursuitLanePhysicalRelation.NonAdjacent
+            or AiPursuitLanePhysicalRelation.InvalidGeometry)
+        {
+            var rejection = physicalRelation == AiPursuitLanePhysicalRelation.NonAdjacent
+                ? AiPursuitLaneRejectionReason.NonAdjacent
+                : AiPursuitLaneRejectionReason.InvalidGeometry;
+            var reason = physicalRelation == AiPursuitLanePhysicalRelation.NonAdjacent
+                ? AiPursuitLaneEvaluationReason.NonAdjacent
+                : AiPursuitLaneEvaluationReason.InvalidGeometry;
+            diagnostics.Add(new AiPursuitLaneCandidateDiagnostic(
+                adjacentPointId, direction, rejection));
+            routeDiagnostics.Add(new AiPursuitLaneRouteDiagnostic(
+                adjacentPointId, direction, AiRouteSearchFailure.InvalidRequest, null, 0, 0,
+                null, null, reason)
+            {
+                PhysicalRelation = physicalRelation
+            });
+            return;
+        }
+
         var route = _tryPlan(adjacentPointId, targetPointIds, limits);
         if (route.Plan == null)
         {
@@ -612,7 +646,7 @@ public sealed class AiPursuitLaneSelector
         {
             JunctionId = decision.Value.JunctionId,
             Motivation = AiPursuitLaneMotivation.FutureJunction,
-            PhysicalRelation = Relation(direction)
+            PhysicalRelation = physicalRelation
         });
     }
 
@@ -688,6 +722,16 @@ public sealed class AiPursuitLaneSelector
     private static AiPursuitLaneEvaluationReason ResolveFailureReason(
         IReadOnlyCollection<AiPursuitLaneCandidateDiagnostic> diagnostics)
     {
+        if (diagnostics.Any(candidate =>
+                candidate.Rejection == AiPursuitLaneRejectionReason.InvalidGeometry))
+        {
+            return AiPursuitLaneEvaluationReason.InvalidGeometry;
+        }
+        if (diagnostics.Any(candidate =>
+                candidate.Rejection == AiPursuitLaneRejectionReason.NonAdjacent))
+        {
+            return AiPursuitLaneEvaluationReason.NonAdjacent;
+        }
         if (diagnostics.Any(candidate =>
                 candidate.Rejection == AiPursuitLaneRejectionReason.InsufficientPreparationDistance))
         {
