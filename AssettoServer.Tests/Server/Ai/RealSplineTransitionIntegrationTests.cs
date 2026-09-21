@@ -77,6 +77,97 @@ public class RealSplineTransitionIntegrationTests
         });
     }
 
+    [TestCase(171761, 283881, 283943)]
+    [TestCase(171763, 283883, 283945)]
+    [TestCase(171765, 283885, 283947)]
+    [Explicit("Requires POLICE_CHASE_FAST_LANE_AIP pointing to the real Shutoko package")]
+    public void DirectPhysicalTargetUsesReciprocalAdjacentLaneWithoutJunction(
+        int policePointId,
+        int adjacentPointId,
+        int targetPointId)
+    {
+        var sourcePath = GetRealFastLanePath();
+        using var fixture = AipFixture.FromExisting(sourcePath);
+        using var spline = fixture.Load("shuto_revival_project_beta_ptb");
+        var planner = new AiRoutePlanner(spline);
+        var selector = new AiPursuitLaneSelector(spline, planner);
+
+        var result = selector.SelectForAlignment(
+            policePointId,
+            new HashSet<int> { targetPointId },
+            new AiRouteSearchLimits(20_000, 50_000),
+            60,
+            1000);
+
+        var sourceLeftId = spline.Points[policePointId].LeftId;
+        var sourceRightId = spline.Points[policePointId].RightId;
+        var adjacentLeftId = spline.Points[adjacentPointId].LeftId;
+        var adjacentRightId = spline.Points[adjacentPointId].RightId;
+        Assert.Multiple(() =>
+        {
+            Assert.That(new[] { sourceLeftId, sourceRightId },
+                Does.Contain(adjacentPointId));
+            Assert.That(new[] { adjacentLeftId, adjacentRightId },
+                Does.Contain(policePointId));
+            Assert.That(spline.Operations.IsSameDirection(policePointId, adjacentPointId),
+                Is.True);
+            Assert.That(result.Selection!.ToPointId, Is.EqualTo(adjacentPointId));
+            Assert.That(result.Selection.Motivation,
+                Is.EqualTo(AiPursuitLaneMotivation.TargetLaneAlignment));
+            Assert.That(result.Selection.JunctionId, Is.Null);
+            Assert.That(result.Selection.DistanceToDecisionMeters, Is.InRange(90, 100));
+            Assert.That(result.Selection.DestinationPlan.Nodes[0].PointId,
+                Is.EqualTo(adjacentPointId));
+        });
+    }
+
+    [Test]
+    [Explicit("Requires POLICE_CHASE_FAST_LANE_AIP pointing to the real Shutoko package")]
+    public void DirectPhysicalTargetCompletesAtImmediateAdjacentLane()
+    {
+        const int policePointId = 171761;
+        const int adjacentPointId = 283881;
+        const int targetPointId = 283943;
+        var sourcePath = GetRealFastLanePath();
+        using var fixture = AipFixture.FromExisting(sourcePath);
+        using var spline = fixture.Load("shuto_revival_project_beta_ptb");
+        var planner = new AiRoutePlanner(spline);
+        var selector = new AiPursuitLaneSelector(spline, planner);
+        var selection = selector.SelectForAlignment(
+            policePointId,
+            new HashSet<int> { targetPointId },
+            new AiRouteSearchLimits(20_000, 50_000),
+            60,
+            1000).Selection!;
+        var controller = new AiLaneChangeController(60, 3000);
+
+        var prepared = controller.Prepare(
+            selection,
+            CreateCursor(spline, policePointId, 0),
+            CreateCursor(spline, adjacentPointId, 0),
+            0,
+            1);
+        controller.UpdateWaiting(AiLaneChangeSafetyStatus.Safe, 0);
+        var moved = controller.TryMove(60, 100, out var movement);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(prepared, Is.True);
+            Assert.That(moved, Is.True);
+            Assert.That(movement.Completed, Is.True);
+            Assert.That(selection.ToPointId, Is.EqualTo(adjacentPointId));
+            Assert.That(IsOnForwardChain(
+                spline, adjacentPointId, movement.DestinationPointId), Is.True,
+                "Completion must advance continuously on the selected adjacent lane");
+            Assert.That(movement.DestinationPointId, Is.Not.EqualTo(policePointId));
+            Assert.That(controller.Event!.Kind,
+                Is.EqualTo(AiPursuitLaneChangeEventKind.Completed));
+            Assert.That(selection.DestinationPlan.Nodes[0].PointId,
+                Is.EqualTo(adjacentPointId),
+                "The route starts on the adjacent forward chain; lateral motion belongs to the controller");
+        });
+    }
+
     [Test]
     [Explicit("Requires POLICE_CHASE_FAST_LANE_AIP pointing to the real Shutoko package")]
     public void RealShutokoPackageSelectsImmediateLaneForForwardJunctionRoute()
@@ -465,6 +556,29 @@ public class RealSplineTransitionIntegrationTests
             : Vector3.Distance(
                 spline.Points[pointId].Position,
                 spline.Points[nextPointId].Position);
+    }
+
+    private static bool IsOnForwardChain(
+        AiSpline spline,
+        int startPointId,
+        int candidatePointId)
+    {
+        var pointId = startPointId;
+        for (var i = 0; i < 1000 && pointId >= 0; i++)
+        {
+            if (pointId == candidatePointId)
+                return true;
+            pointId = spline.Points[pointId].NextId;
+        }
+        return false;
+    }
+
+    private static string GetRealFastLanePath()
+    {
+        var sourcePath = Environment.GetEnvironmentVariable("POLICE_CHASE_FAST_LANE_AIP");
+        Assert.That(sourcePath, Is.Not.Null.And.Not.Empty);
+        Assert.That(File.Exists(sourcePath), Is.True, sourcePath);
+        return sourcePath!;
     }
 
     private sealed record LaneChangeScenario(
