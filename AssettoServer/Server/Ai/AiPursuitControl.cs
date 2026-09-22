@@ -26,7 +26,52 @@ public sealed record AiPursuitTrackingOptions(
     float MaximumRouteDistanceMeters,
     int MaximumVisitedNodes,
     int RouteGraceMilliseconds,
-    AiPursuitLaneChangeOptions? LaneChange = null);
+    AiPursuitLaneChangeOptions? LaneChange = null,
+    AiPursuitDrivingOptions? Driving = null);
+
+public enum AiPursuitDrivingState
+{
+    CatchUp,
+    Approach,
+    ClosePressure,
+    Contact,
+    Recovery
+}
+
+public enum AiPursuitDrivingReason
+{
+    DistanceCatchUp,
+    DistanceApproach,
+    ClosePressure,
+    ContactPressure,
+    ContactDisabled,
+    ExcessClosingSpeed,
+    LaneChangeLimited,
+    CollisionRecovery
+}
+
+public sealed record AiPursuitDrivingOptions(
+    bool Enabled,
+    bool ContactEnabled,
+    float CatchUpDistanceMeters,
+    float CloseDistanceMeters,
+    float ContactDistanceMeters,
+    float MaximumSpeedMetersPerSecond,
+    float MaximumClosingSpeedMetersPerSecond,
+    float ContactClosingSpeedMetersPerSecond);
+
+public sealed record AiPursuitDrivingDiagnostics(
+    long Revision,
+    AiPursuitDrivingState State,
+    AiPursuitDrivingReason Reason,
+    float RouteDistanceMeters,
+    float PhysicalClearanceMeters,
+    float TargetSpeedMetersPerSecond,
+    float PoliceSpeedMetersPerSecond,
+    float ClosingSpeedMetersPerSecond,
+    float DesiredClosingSpeedMetersPerSecond,
+    float RequestedSpeedMetersPerSecond,
+    bool CollisionReported);
 
 public sealed record AiPursuitJunctionDecision(
     int JunctionId,
@@ -60,7 +105,8 @@ public sealed record AiPursuitTrackingResult(
     float TargetSpeedMetersPerSecond,
     AiPursuitRouteDiagnostics? RouteDiagnostics = null,
     AiPursuitSearchDiagnostics? SearchDiagnostics = null,
-    AiPursuitLaneChangeDiagnostics? LaneChangeDiagnostics = null);
+    AiPursuitLaneChangeDiagnostics? LaneChangeDiagnostics = null,
+    AiPursuitDrivingDiagnostics? DrivingDiagnostics = null);
 
 public sealed record AiPursuitLaneChangeDiagnostics(
     long Revision,
@@ -229,6 +275,33 @@ public static class AiPursuitControl
             {
                 throw new ArgumentOutOfRangeException(nameof(laneChange.LookaheadMeters));
             }
+        }
+        if (options.Driving is { Enabled: true } driving)
+            ValidateDrivingOptions(driving);
+    }
+
+    public static void ValidateDrivingOptions(AiPursuitDrivingOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!float.IsFinite(options.CatchUpDistanceMeters)
+            || !float.IsFinite(options.CloseDistanceMeters)
+            || !float.IsFinite(options.ContactDistanceMeters)
+            || options.CatchUpDistanceMeters <= options.CloseDistanceMeters
+            || options.CloseDistanceMeters <= options.ContactDistanceMeters
+            || options.ContactDistanceMeters <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options));
+        }
+        if (!float.IsFinite(options.MaximumSpeedMetersPerSecond)
+            || options.MaximumSpeedMetersPerSecond <= 0
+            || !float.IsFinite(options.MaximumClosingSpeedMetersPerSecond)
+            || options.MaximumClosingSpeedMetersPerSecond < 0
+            || !float.IsFinite(options.ContactClosingSpeedMetersPerSecond)
+            || options.ContactClosingSpeedMetersPerSecond < 0
+            || options.ContactClosingSpeedMetersPerSecond
+                > options.MaximumClosingSpeedMetersPerSecond)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options));
         }
     }
 }
