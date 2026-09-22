@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using AssettoServer.Server.Ai.Routing;
+using AssettoServer.Utils;
 
 namespace AssettoServer.Server.Ai;
 
@@ -161,10 +162,14 @@ internal sealed record AiPursuitSnapshot(
     Vector3 TargetPosition,
     AiPursuitTrackingOptions Options,
     AiPursuitRouteState NavigationState,
-    float? DesiredSpeedMetersPerSecond);
+    float? DesiredSpeedMetersPerSecond,
+    AiPursuitDrivingControllerState? DrivingState = null,
+    AiPursuitDrivingDiagnostics? DrivingDiagnostics = null);
 
 public static class AiPursuitControl
 {
+    private const float WalkingSpeedMetersPerSecond = 10 / 3.6f;
+
     public static bool ShouldRetain(float distanceSquared, float maximumDistanceMeters)
     {
         ValidateMaximumDistance(maximumDistanceMeters);
@@ -180,6 +185,56 @@ public static class AiPursuitControl
 
     public static float ApplySafetyLimit(float requestedSpeed, float safetyLimit) =>
         Math.Min(requestedSpeed, safetyLimit);
+
+    public static float CalculatePhysicalClearance(
+        float centerDistance,
+        float policeFrontLength,
+        float targetRearLength)
+    {
+        ValidateNonNegativeFinite(centerDistance, nameof(centerDistance));
+        ValidateNonNegativeFinite(policeFrontLength, nameof(policeFrontLength));
+        ValidateNonNegativeFinite(targetRearLength, nameof(targetRearLength));
+        return Math.Max(0, centerDistance - policeFrontLength - targetRearLength);
+    }
+
+    public static bool IsControlledTargetObstacle(
+        byte? pursuitTargetSessionId,
+        byte obstacleSessionId,
+        bool aggressiveDrivingEnabled) =>
+        aggressiveDrivingEnabled
+        && pursuitTargetSessionId.HasValue
+        && pursuitTargetSessionId.Value == obstacleSessionId;
+
+    public static float? ResolvePlayerObstacleSpeed(
+        float currentSpeed,
+        float playerSpeed,
+        float playerDistance,
+        float minimumObstacleDistance,
+        float deceleration,
+        bool controlledTarget)
+    {
+        ValidateNonNegativeFinite(currentSpeed, nameof(currentSpeed));
+        ValidateNonNegativeFinite(playerSpeed, nameof(playerSpeed));
+        ValidateNonNegativeFinite(playerDistance, nameof(playerDistance));
+        ValidateNonNegativeFinite(minimumObstacleDistance, nameof(minimumObstacleDistance));
+        if (!float.IsFinite(deceleration) || deceleration <= 0)
+            throw new ArgumentOutOfRangeException(nameof(deceleration));
+        if (controlledTarget)
+            return null;
+        if (playerDistance < minimumObstacleDistance)
+            return 0;
+
+        if (playerSpeed < 0.1f)
+            playerSpeed = 0;
+        if ((playerSpeed < currentSpeed || playerSpeed == 0)
+            && playerDistance < PhysicsUtils.CalculateBrakingDistance(
+                currentSpeed - playerSpeed,
+                deceleration) * 2 + 20)
+        {
+            return Math.Max(WalkingSpeedMetersPerSecond, playerSpeed);
+        }
+        return null;
+    }
 
     public static AiPursuitRouteDiagnostics CreateRouteDiagnostics(
         AiPursuitNavigationResult navigation,
@@ -244,6 +299,12 @@ public static class AiPursuitControl
     {
         if (!float.IsFinite(maximumDistanceMeters) || maximumDistanceMeters <= 0)
             throw new ArgumentOutOfRangeException(nameof(maximumDistanceMeters));
+    }
+
+    private static void ValidateNonNegativeFinite(float value, string parameterName)
+    {
+        if (!float.IsFinite(value) || value < 0)
+            throw new ArgumentOutOfRangeException(parameterName);
     }
 
     public static void ValidateTrackingOptions(AiPursuitTrackingOptions options)
