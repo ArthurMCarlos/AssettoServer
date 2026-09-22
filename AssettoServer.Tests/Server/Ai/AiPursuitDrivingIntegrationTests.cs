@@ -1,4 +1,7 @@
 using AssettoServer.Server.Ai;
+using System.Numerics;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace AssettoServer.Tests.Server.Ai;
 
@@ -34,6 +37,23 @@ public class AiPursuitDrivingIntegrationTests
         Assert.That(clearance, Is.Zero);
     }
 
+    [Test]
+    public void InvalidLivePositionOrSpeedIsRejectedBeforeRouteLookup()
+    {
+        var position = new Vector3(1, 2, 3);
+        Assert.Multiple(() =>
+        {
+            Assert.That(AiPursuitControl.HasFiniteTrackingMeasurements(
+                position, position, position, 20), Is.True);
+            Assert.That(AiPursuitControl.HasFiniteTrackingMeasurements(
+                position, new Vector3(float.NaN, 2, 3), position, 20), Is.False);
+            Assert.That(AiPursuitControl.HasFiniteTrackingMeasurements(
+                position, position, new Vector3(1, float.PositiveInfinity, 3), 20), Is.False);
+            Assert.That(AiPursuitControl.HasFiniteTrackingMeasurements(
+                position, position, position, float.NaN), Is.False);
+        });
+    }
+
     [TestCase((byte)10, (byte)10, true, true)]
     [TestCase((byte)10, (byte)11, true, false)]
     [TestCase((byte)10, (byte)10, false, false)]
@@ -64,6 +84,39 @@ public class AiPursuitDrivingIntegrationTests
             controlledTarget: true);
 
         Assert.That(limit, Is.Null);
+    }
+
+    [Test]
+    public void PursuedTargetDoesNotMaskAnotherPlayerInBrakingRange()
+    {
+        byte? selected = null;
+        var closestDistanceSquared = float.MaxValue;
+        foreach (var candidate in new[]
+                 {
+                     (SessionId: (byte)10, DistanceSquared: 4f),
+                     (SessionId: (byte)11, DistanceSquared: 9f)
+                 })
+        {
+            if (!AiPursuitControl.ShouldReplaceClosestPlayerObstacle(
+                    exemptTargetSessionId: 10,
+                    candidate.SessionId,
+                    candidate.DistanceSquared,
+                    isAhead: true,
+                    closestDistanceSquared))
+                continue;
+
+            selected = candidate.SessionId;
+            closestDistanceSquared = candidate.DistanceSquared;
+        }
+
+        Assert.That(selected, Is.EqualTo(11));
+        Assert.That(AiPursuitControl.ResolvePlayerObstacleSpeed(
+            currentSpeed: 20,
+            playerSpeed: 10,
+            playerDistance: MathF.Sqrt(closestDistanceSquared),
+            minimumObstacleDistance: 10,
+            deceleration: 8.5f,
+            controlledTarget: false), Is.Zero);
     }
 
     [TestCase(false)]
@@ -182,7 +235,7 @@ public class AiPursuitDrivingIntegrationTests
         {
             Assert.That(recovery.Diagnostics.State, Is.EqualTo(AiPursuitDrivingState.Recovery));
             Assert.That(recovery.Diagnostics.Reason, Is.EqualTo(AiPursuitDrivingReason.CollisionRecovery));
-            Assert.That(recovery.Diagnostics.CollisionReported, Is.True);
+            Assert.That(recovery.Diagnostics.CollisionReported, Is.False);
             Assert.That(recovery.State.RouteRevision, Is.EqualTo(7));
         });
     }
@@ -213,6 +266,69 @@ public class AiPursuitDrivingIntegrationTests
         var recovered = controller.Update(DrivingRequest(150, 140, previous: collision));
 
         Assert.That(recovered.Diagnostics.State, Is.EqualTo(AiPursuitDrivingState.CatchUp));
+    }
+
+    [Test]
+    public void CollisionEventIsDeliveredBeforeImmediateSeparationTransition()
+    {
+        var controller = new AiPursuitDrivingController();
+        var active = controller.Update(DrivingRequest(2, 1));
+        var collisionState = controller.ReportCollision(active.State, nowMilliseconds: 1000);
+        var collision = active.Diagnostics with
+        {
+            Revision = collisionState.DiagnosticRevision,
+            State = AiPursuitDrivingState.Recovery,
+            Reason = AiPursuitDrivingReason.CollisionRecovery,
+            CollisionReported = true
+        };
+        var separated = controller.Update(DrivingRequest(150, 140, previous: collisionState));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AiPursuitControl.SelectDrivingDiagnosticsForDelivery(
+                collision,
+                separated.Diagnostics), Is.EqualTo(collision));
+            Assert.That(AiPursuitControl.SelectDrivingDiagnosticsForDelivery(
+                separated.Diagnostics,
+                separated.Diagnostics), Is.EqualTo(separated.Diagnostics));
+            Assert.That(separated.Diagnostics.State, Is.EqualTo(AiPursuitDrivingState.CatchUp));
+        });
+    }
+
+    [Test]
+    public void CollisionUpdateCannotBeOverwrittenByAnEarlierTrackingRead()
+    {
+        var gate = new AiPursuitUpdateGate();
+        var state = 1;
+        using var trackingRead = new ManualResetEventSlim();
+        using var resumeTracking = new ManualResetEventSlim();
+        using var collisionAttempted = new ManualResetEventSlim();
+        var tracking = Task.Run(() => gate.Run(() =>
+        {
+            var previous = state;
+            trackingRead.Set();
+            if (!resumeTracking.Wait(TimeSpan.FromSeconds(5)))
+                throw new TimeoutException();
+            state = previous + 2;
+        }));
+
+        try
+        {
+            Assert.That(trackingRead.Wait(TimeSpan.FromSeconds(5)), Is.True);
+            var collision = Task.Run(() =>
+            {
+                collisionAttempted.Set();
+                gate.Run(() => state = 2);
+            });
+            Assert.That(collisionAttempted.Wait(TimeSpan.FromSeconds(5)), Is.True);
+            resumeTracking.Set();
+            Assert.That(Task.WaitAll([tracking, collision], TimeSpan.FromSeconds(5)), Is.True);
+            Assert.That(state, Is.EqualTo(2));
+        }
+        finally
+        {
+            resumeTracking.Set();
+        }
     }
 
     private static AiPursuitDrivingRequest DrivingRequest(

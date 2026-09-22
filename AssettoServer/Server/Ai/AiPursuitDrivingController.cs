@@ -37,10 +37,13 @@ public sealed class AiPursuitDrivingController
     {
         ArgumentNullException.ThrowIfNull(request);
         AiPursuitControl.ValidateDrivingOptions(request.Options);
-        ValidateMeasurement(request.RouteDistanceMeters, nameof(request.RouteDistanceMeters));
-        ValidateMeasurement(request.PhysicalClearanceMeters, nameof(request.PhysicalClearanceMeters));
-        ValidateMeasurement(request.TargetSpeedMetersPerSecond, nameof(request.TargetSpeedMetersPerSecond));
-        ValidateMeasurement(request.PoliceSpeedMetersPerSecond, nameof(request.PoliceSpeedMetersPerSecond));
+        if (!IsValidMeasurement(request.RouteDistanceMeters)
+            || !IsValidMeasurement(request.PhysicalClearanceMeters)
+            || !IsValidMeasurement(request.TargetSpeedMetersPerSecond)
+            || !IsValidMeasurement(request.PoliceSpeedMetersPerSecond))
+        {
+            return InvalidMeasurementDecision(request);
+        }
 
         var options = request.Options;
         var previous = request.PreviousState;
@@ -106,7 +109,7 @@ public sealed class AiPursuitDrivingController
             closingSpeed,
             desiredClosingSpeed,
             requestedSpeed,
-            recoveryActive);
+            false);
         return new AiPursuitDrivingDecision(requestedSpeed, controllerState, diagnostics);
     }
 
@@ -230,9 +233,37 @@ public sealed class AiPursuitDrivingController
     private static float Lerp(float start, float end, float amount) =>
         start + (end - start) * amount;
 
-    private static void ValidateMeasurement(float value, string name)
+    private static AiPursuitDrivingDecision InvalidMeasurementDecision(
+        AiPursuitDrivingRequest request)
     {
-        if (!float.IsFinite(value) || value < 0)
-            throw new ArgumentOutOfRangeException(name);
+        var previous = request.PreviousState;
+        var state = previous?.State ?? AiPursuitDrivingState.Approach;
+        var revision = (previous?.DiagnosticRevision ?? 0)
+                       + (previous?.Reason == AiPursuitDrivingReason.InvalidMeasurement ? 0 : 1);
+        var controllerState = new AiPursuitDrivingControllerState(
+            state,
+            AiPursuitDrivingReason.InvalidMeasurement,
+            0,
+            revision,
+            previous?.RecoveryActive ?? false,
+            previous?.LastCollisionMilliseconds ?? 0,
+            request.RouteRevision);
+        var diagnostics = new AiPursuitDrivingDiagnostics(
+            revision,
+            state,
+            AiPursuitDrivingReason.InvalidMeasurement,
+            FiniteOrZero(request.RouteDistanceMeters),
+            FiniteOrZero(request.PhysicalClearanceMeters),
+            FiniteOrZero(request.TargetSpeedMetersPerSecond),
+            FiniteOrZero(request.PoliceSpeedMetersPerSecond),
+            0,
+            0,
+            0,
+            false);
+        return new AiPursuitDrivingDecision(0, controllerState, diagnostics);
     }
+
+    private static bool IsValidMeasurement(float value) => float.IsFinite(value) && value >= 0;
+
+    private static float FiniteOrZero(float value) => IsValidMeasurement(value) ? value : 0;
 }

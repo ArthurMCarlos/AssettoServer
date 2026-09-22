@@ -163,18 +163,26 @@ public class AiPursuitDrivingControllerTests
     [TestCase(10, float.PositiveInfinity, 10, 10)]
     [TestCase(10, 10, float.NaN, 10)]
     [TestCase(10, 10, 10, float.NegativeInfinity)]
-    public void RejectsNonFiniteMeasurements(
+    public void InvalidMeasurementsProduceBoundedConservativeRequest(
         float routeDistance,
         float clearance,
         float targetSpeed,
         float policeSpeed)
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            CreateController().Update(Request(
-                routeDistance,
-                clearance,
-                targetSpeed,
-                policeSpeed)));
+        var decision = CreateController().Update(Request(
+            routeDistance,
+            clearance,
+            targetSpeed,
+            policeSpeed));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.RequestedSpeedMetersPerSecond, Is.Zero);
+            Assert.That(float.IsFinite(decision.Diagnostics.RouteDistanceMeters), Is.True);
+            Assert.That(float.IsFinite(decision.Diagnostics.PhysicalClearanceMeters), Is.True);
+            Assert.That(float.IsFinite(decision.Diagnostics.ClosingSpeedMetersPerSecond), Is.True);
+            Assert.That(decision.Diagnostics.Reason, Is.EqualTo(AiPursuitDrivingReason.InvalidMeasurement));
+        });
     }
 
     [Test]

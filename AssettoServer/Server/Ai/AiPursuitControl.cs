@@ -48,7 +48,8 @@ public enum AiPursuitDrivingReason
     ContactDisabled,
     ExcessClosingSpeed,
     LaneChangeLimited,
-    CollisionRecovery
+    CollisionRecovery,
+    InvalidMeasurement
 }
 
 internal enum AiCollisionDisposition
@@ -172,6 +173,23 @@ internal sealed record AiPursuitSnapshot(
     AiPursuitDrivingControllerState? DrivingState = null,
     AiPursuitDrivingDiagnostics? DrivingDiagnostics = null);
 
+internal sealed class AiPursuitUpdateGate
+{
+    private readonly object _sync = new();
+
+    public TResult Run<TResult>(Func<TResult> update)
+    {
+        lock (_sync)
+            return update();
+    }
+
+    public void Run(Action update)
+    {
+        lock (_sync)
+            update();
+    }
+}
+
 public static class AiPursuitControl
 {
     private const float WalkingSpeedMetersPerSecond = 10 / 3.6f;
@@ -203,6 +221,16 @@ public static class AiPursuitControl
         return Math.Max(0, centerDistance - policeFrontLength - targetRearLength);
     }
 
+    internal static bool HasFiniteTrackingMeasurements(
+        Vector3 policePosition,
+        Vector3 targetPosition,
+        Vector3 targetVelocity,
+        float policeSpeed) =>
+        float.IsFinite(Vector3.DistanceSquared(policePosition, targetPosition))
+        && float.IsFinite(targetVelocity.Length())
+        && float.IsFinite(policeSpeed)
+        && policeSpeed >= 0;
+
     public static bool IsControlledTargetObstacle(
         byte? pursuitTargetSessionId,
         byte obstacleSessionId,
@@ -210,6 +238,23 @@ public static class AiPursuitControl
         aggressiveDrivingEnabled
         && pursuitTargetSessionId.HasValue
         && pursuitTargetSessionId.Value == obstacleSessionId;
+
+    internal static bool ShouldReplaceClosestPlayerObstacle(
+        byte? exemptTargetSessionId,
+        byte candidateSessionId,
+        float candidateDistanceSquared,
+        bool isAhead,
+        float closestDistanceSquared) =>
+        candidateSessionId != exemptTargetSessionId
+        && isAhead
+        && float.IsFinite(candidateDistanceSquared)
+        && candidateDistanceSquared >= 0
+        && candidateDistanceSquared < closestDistanceSquared;
+
+    internal static AiPursuitDrivingDiagnostics? SelectDrivingDiagnosticsForDelivery(
+        AiPursuitDrivingDiagnostics? previous,
+        AiPursuitDrivingDiagnostics? current) =>
+        previous?.CollisionReported == true ? previous : current;
 
     internal static AiCollisionDisposition ResolveCollisionDisposition(
         byte? pursuitTargetSessionId,

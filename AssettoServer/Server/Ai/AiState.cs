@@ -78,6 +78,7 @@ public class AiState
     private AiLaneChangeController? _laneChangeController;
     private AiPursuitLaneChangePipeline? _laneChangePipeline;
     private readonly AiPursuitLaneDiagnosticTracker _laneDiagnosticTracker = new();
+    private readonly AiPursuitUpdateGate _pursuitUpdateGate = new();
     private AiPursuitSnapshot? _pursuit;
 
     private static readonly List<Color> CarColors =
@@ -143,6 +144,13 @@ public class AiState
         EntryCar target,
         AiPursuitTrackingOptions options)
     {
+        return _pursuitUpdateGate.Run(() => TrackPursuitLocked(target, options));
+    }
+
+    private AiPursuitTrackingResult TrackPursuitLocked(
+        EntryCar target,
+        AiPursuitTrackingOptions options)
+    {
         ArgumentNullException.ThrowIfNull(target);
         AiPursuitControl.ValidateTrackingOptions(options);
 
@@ -155,7 +163,46 @@ public class AiState
         }
 
         var targetPosition = target.Status.Position;
-        var targetSpeed = target.Status.Velocity.Length();
+        var targetVelocity = target.Status.Velocity;
+        var previous = Volatile.Read(ref _pursuit);
+        if (!AiPursuitControl.HasFiniteTrackingMeasurements(
+                Status.Position, targetPosition, targetVelocity, CurrentSpeed))
+        {
+            if (previous?.TargetSessionId == target.SessionId
+                && options.Driving is { Enabled: true } fallbackDriving)
+            {
+                var fallback = _pursuitDrivingController.Update(
+                    new AiPursuitDrivingRequest(
+                        fallbackDriving,
+                        previous.NavigationState.Plan.DistanceMeters,
+                        float.NaN,
+                        targetVelocity.Length(),
+                        CurrentSpeed,
+                        _laneChangeController?.Phase ?? AiLaneChangePhase.None,
+                        previous.NavigationState.Revision,
+                        _sessionManager.ServerTimeMilliseconds,
+                        previous.DrivingState));
+                Interlocked.Exchange(ref _pursuit, previous with
+                {
+                    DesiredSpeedMetersPerSecond = fallback.RequestedSpeedMetersPerSecond,
+                    DrivingState = fallback.State,
+                    DrivingDiagnostics = fallback.Diagnostics
+                });
+                return new AiPursuitTrackingResult(
+                    AiPursuitTrackingStatus.RouteTemporarilyUnavailable,
+                    null,
+                    0,
+                    DrivingDiagnostics: AiPursuitControl.SelectDrivingDiagnosticsForDelivery(
+                        previous.DrivingDiagnostics,
+                        fallback.Diagnostics));
+            }
+
+            return new AiPursuitTrackingResult(
+                AiPursuitTrackingStatus.RouteTemporarilyUnavailable,
+                null,
+                0);
+        }
+        var targetSpeed = targetVelocity.Length();
         var spatialDistanceSquared = Vector3.DistanceSquared(Status.Position, targetPosition);
         if (!AiPursuitControl.ShouldRetain(
                 spatialDistanceSquared,
@@ -168,14 +215,13 @@ public class AiState
                 targetSpeed);
         }
 
-        var previous = Volatile.Read(ref _pursuit);
         var previousNavigation = previous?.TargetSessionId == target.SessionId
             ? previous.NavigationState
             : null;
         var navigation = _pursuitNavigator.Update(
             CurrentSplinePointId,
             targetPosition,
-            target.Status.Velocity,
+            targetVelocity,
             _configuration.Extra.AiParams.MaxPlayerDistanceToAiSplineSquared,
             _sessionManager.ServerTimeMilliseconds,
             previousNavigation,
@@ -306,6 +352,9 @@ public class AiState
             drivingDiagnostics);
         Interlocked.Exchange(ref _pursuit, snapshot);
         _junctionEvaluator.SetExplicitDecisions(navigationState.Plan.JunctionDecisions);
+        var deliveredDrivingDiagnostics = AiPursuitControl.SelectDrivingDiagnosticsForDelivery(
+            sameTarget ? previous?.DrivingDiagnostics : null,
+            drivingDiagnostics);
 
         if (navigation.Status == AiPursuitNavigationStatus.RouteTemporarilyUnavailable)
         {
@@ -315,7 +364,7 @@ public class AiState
                 targetSpeed,
                 SearchDiagnostics: searchDiagnostics,
                 LaneChangeDiagnostics: laneChangeDiagnostics,
-                DrivingDiagnostics: drivingDiagnostics);
+                DrivingDiagnostics: deliveredDrivingDiagnostics);
         }
 
         var diagnostics = AiPursuitControl.CreateRouteDiagnostics(
@@ -330,7 +379,7 @@ public class AiState
             diagnostics,
             searchDiagnostics,
             laneChangeDiagnostics,
-            drivingDiagnostics);
+            deliveredDrivingDiagnostics);
     }
 
     private bool TryRetainCommittedLaneChange(
@@ -426,6 +475,11 @@ public class AiState
     public void SetPursuitDesiredSpeed(float metersPerSecond)
     {
         AiPursuitControl.ValidateDesiredSpeed(metersPerSecond);
+        _pursuitUpdateGate.Run(() => SetPursuitDesiredSpeedLocked(metersPerSecond));
+    }
+
+    private void SetPursuitDesiredSpeedLocked(float metersPerSecond)
+    {
         while (true)
         {
             var current = Volatile.Read(ref _pursuit);
@@ -451,6 +505,11 @@ public class AiState
     }
 
     public bool ReportPursuitCollision(byte targetSessionId)
+    {
+        return _pursuitUpdateGate.Run(() => ReportPursuitCollisionLocked(targetSessionId));
+    }
+
+    private bool ReportPursuitCollisionLocked(byte targetSessionId)
     {
         while (true)
         {
@@ -490,6 +549,11 @@ public class AiState
     }
 
     public void ReleasePursuit()
+    {
+        _pursuitUpdateGate.Run(ReleasePursuitLocked);
+    }
+
+    private void ReleasePursuitLocked()
     {
         Interlocked.Exchange(ref _pursuit, null);
         _junctionEvaluator.SetExplicitDecisions(null);
@@ -874,7 +938,8 @@ public class AiState
         return false;
     }
 
-    private (EntryCar? entryCar, float distance) FindClosestPlayerObstacle()
+    private (EntryCar? entryCar, float distance) FindClosestPlayerObstacle(
+        byte? exemptTargetSessionId = null)
     {
         if (!ShouldIgnorePlayerObstacles())
         {
@@ -887,7 +952,12 @@ public class AiState
                 {
                     float distance = Vector3.DistanceSquared(playerCar.Status.Position, Status.Position);
 
-                    if (distance < minDistance && GetAngleToCar(playerCar.Status) is > 166 and < 194)
+                    if (AiPursuitControl.ShouldReplaceClosestPlayerObstacle(
+                            exemptTargetSessionId,
+                            playerCar.SessionId,
+                            distance,
+                            GetAngleToCar(playerCar.Status) is > 166 and < 194,
+                            minDistance))
                     {
                         minDistance = distance;
                         closestCar = playerCar;
@@ -962,13 +1032,11 @@ public class AiState
         bool hasObstacle = false;
 
         var splineLookahead = SplineLookahead();
-        var playerObstacle = FindClosestPlayerObstacle();
+        var exemptTargetSessionId = pursuit?.Options.Driving is { Enabled: true }
+            ? pursuit.TargetSessionId
+            : (byte?)null;
+        var playerObstacle = FindClosestPlayerObstacle(exemptTargetSessionId);
         var laneChangeSafety = UpdateLaneChangeSafety();
-        var controlledTargetObstacle = playerObstacle.entryCar != null
-                                       && AiPursuitControl.IsControlledTargetObstacle(
-                                           pursuit?.TargetSessionId,
-                                           playerObstacle.entryCar.SessionId,
-                                           pursuit?.Options.Driving is { Enabled: true });
         var playerObstacleSpeed = playerObstacle.entryCar == null
             ? null
             : AiPursuitControl.ResolvePlayerObstacleSpeed(
@@ -977,7 +1045,7 @@ public class AiState
                 playerObstacle.distance,
                 _minObstacleDistance,
                 EntryCar.AiDeceleration,
-                controlledTargetObstacle);
+                controlledTarget: false);
 
         ClosestAiObstacleDistance = splineLookahead.ClosestAiState != null ? splineLookahead.ClosestAiStateDistance : -1;
 
