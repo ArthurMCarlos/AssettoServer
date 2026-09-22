@@ -469,6 +469,19 @@ public sealed class AiPursuitLaneSelector
             return;
         }
 
+        var decision = _getDecision(route.Plan);
+        if (decision.HasValue && decision.Value.DistanceMeters < maneuverDistanceMeters)
+        {
+            diagnostics.Add(new AiPursuitLaneCandidateDiagnostic(
+                adjacentPointId, direction,
+                AiPursuitLaneRejectionReason.InsufficientPreparationDistance));
+            routeDiagnostics.Add(CreateRouteDiagnostic(
+                adjacentPointId, direction, route, decision,
+                AiPursuitLaneEvaluationReason.InsufficientPreparationDistance,
+                AiPursuitLaneMotivation.TargetLaneAlignment));
+            return;
+        }
+
         var distanceToTarget = route.Plan.DistanceMeters;
         if (distanceToTarget > lookaheadMeters)
         {

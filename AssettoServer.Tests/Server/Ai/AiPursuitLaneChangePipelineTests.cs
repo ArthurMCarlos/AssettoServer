@@ -181,6 +181,37 @@ public class AiPursuitLaneChangePipelineTests
     }
 
     [Test]
+    public void AlignmentCannotHideJunctionInsidePhysicalTransition()
+    {
+        var selector = new AiPursuitLaneSelector(
+            _ => new AiAdjacentLanePoints(10, -1),
+            (_, _) => true,
+            (start, targets, _) => start == 10 && targets.Contains(99)
+                ? Search(Plan(10, 99, 30, junctionId: 2))
+                : Search(null),
+            plan => plan.JunctionDecisions.ContainsKey(2)
+                ? new AiPursuitLaneDecision(2, 20)
+                : null);
+        var pipeline = new AiPursuitLaneChangePipeline(
+            selector, new AiLaneChangeController(60, 3000), Cursor, _ => 1000);
+
+        var result = pipeline.Evaluate(
+            0, 0, 100, ActiveFallback(), null,
+            new AiPursuitLaneChangeOptions(true, 60, 3000, 1000),
+            new AiRouteSearchLimits(20_000, 50_000),
+            100);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.RequestPrepared, Is.False);
+            Assert.That(result.Evaluation.Selection, Is.Null);
+            Assert.That(result.Evaluation.Reason,
+                Is.EqualTo(AiPursuitLaneEvaluationReason.InsufficientPreparationDistance));
+            Assert.That(result.ControllerPhase, Is.EqualTo(AiLaneChangePhase.None));
+        });
+    }
+
+    [Test]
     public void CooldownReportsTypedReasonAndDoesNotPrepareRequest()
     {
         var controller = new AiLaneChangeController(60, 3000);
