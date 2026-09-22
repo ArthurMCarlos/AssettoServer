@@ -118,7 +118,34 @@ public class AiPursuitLaneSelectorTests
             Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Change));
             Assert.That(result.Selection!.ToPointId, Is.EqualTo(10));
             Assert.That(result.Selection.JunctionId, Is.Null);
-            Assert.That(result.Selection.DistanceToDecisionMeters, Is.EqualTo(94.6f));
+            Assert.That(result.Selection.DistanceToDecisionMeters, Is.Null);
+            Assert.That(result.Selection.Motivation,
+                Is.EqualTo(AiPursuitLaneMotivation.TargetLaneAlignment));
+        });
+    }
+
+    [TestCase(0f)]
+    [TestCase(30f)]
+    public void SelectsDirectTargetLaneWhenAnchorIsCloserThanTransitionLength(
+        float distanceToTarget)
+    {
+        var selector = CreateSelector(new Dictionary<int, AiRoutePlan?>
+        {
+            [0] = null,
+            [10] = Plan(10, 99, distanceToTarget),
+            [20] = null
+        });
+
+        var result = selector.SelectForAlignment(0, Targets, Limits, 60, 1000);
+
+        Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Change));
+        Assert.That(result.Selection, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Selection!.ToPointId, Is.EqualTo(10));
+            Assert.That(result.Selection.DistanceToDecisionMeters, Is.Null);
+            Assert.That(result.Selection.DestinationPlan.DistanceMeters,
+                Is.EqualTo(distanceToTarget));
             Assert.That(result.Selection.Motivation,
                 Is.EqualTo(AiPursuitLaneMotivation.TargetLaneAlignment));
         });

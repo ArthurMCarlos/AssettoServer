@@ -91,7 +91,7 @@ internal sealed class AiPursuitLaneChangePipeline
             ? destinationLength * (currentProgressMeters / currentSegmentLengthMeters)
             : 0;
         var destinationCursor = _createCursor(selection.ToPointId, destinationProgress);
-        if (selection.DistanceToDecisionMeters - destinationProgress < options.DistanceMeters
+        if (selection.DistanceToDecisionMeters!.Value - destinationProgress < options.DistanceMeters
             || !sourceCursor.CanAdvance(options.DistanceMeters)
             || !destinationCursor.CanAdvance(options.DistanceMeters))
         {

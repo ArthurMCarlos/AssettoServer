@@ -115,7 +115,7 @@ public class RealSplineTransitionIntegrationTests
             Assert.That(result.Selection.Motivation,
                 Is.EqualTo(AiPursuitLaneMotivation.TargetLaneAlignment));
             Assert.That(result.Selection.JunctionId, Is.Null);
-            Assert.That(result.Selection.DistanceToDecisionMeters, Is.InRange(90, 100));
+            Assert.That(result.Selection.DistanceToDecisionMeters, Is.Null);
             Assert.That(result.Selection.DestinationPlan.Nodes[0].PointId,
                 Is.EqualTo(adjacentPointId));
         });

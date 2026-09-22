@@ -70,7 +70,7 @@ public sealed record AiPursuitLaneSelection(
     int ToPointId,
     AiLaneChangeDirection Direction,
     AiRoutePlan DestinationPlan,
-    float DistanceToDecisionMeters)
+    float? DistanceToDecisionMeters)
 {
     public int? JunctionId { get; init; }
     public AiPursuitLaneMotivation Motivation { get; init; } = AiPursuitLaneMotivation.FutureJunction;
@@ -458,16 +458,6 @@ public sealed class AiPursuitLaneSelector
         }
 
         var distanceToTarget = route.Plan.DistanceMeters;
-        if (distanceToTarget < maneuverDistanceMeters)
-        {
-            diagnostics.Add(new AiPursuitLaneCandidateDiagnostic(
-                adjacentPointId, direction,
-                AiPursuitLaneRejectionReason.InsufficientPreparationDistance));
-            routeDiagnostics.Add(CreateRouteDiagnostic(
-                adjacentPointId, direction, route, null,
-                AiPursuitLaneEvaluationReason.InsufficientPreparationDistance));
-            return;
-        }
         if (distanceToTarget > lookaheadMeters)
         {
             diagnostics.Add(new AiPursuitLaneCandidateDiagnostic(
@@ -487,7 +477,7 @@ public sealed class AiPursuitLaneSelector
             adjacentPointId,
             direction,
             route.Plan,
-            distanceToTarget)
+            null)
         {
             Motivation = AiPursuitLaneMotivation.TargetLaneAlignment,
             PhysicalRelation = physicalRelation
