@@ -164,6 +164,85 @@ public class AiPursuitLaneDiagnosticsTests
         Assert.That(changed!.Revision, Is.EqualTo(2));
     }
 
+    [Test]
+    public void RejectionUsesCandidateWhoseEvidenceMatchesPublishedReason()
+    {
+        var evaluation = Evaluation(500) with
+        {
+            Kind = AiPursuitLaneSelectionKind.Unreachable,
+            Selection = null,
+            Reason = AiPursuitLaneEvaluationReason.InsufficientPreparationDistance,
+            CandidateLaneRoutes =
+            [
+                new AiPursuitLaneRouteDiagnostic(
+                    10,
+                    AiLaneChangeDirection.Left,
+                    AiRouteSearchFailure.DistanceLimit,
+                    null,
+                    500,
+                    0,
+                    null,
+                    null,
+                    AiPursuitLaneEvaluationReason.NoForwardRoute),
+                new AiPursuitLaneRouteDiagnostic(
+                    20,
+                    AiLaneChangeDirection.Right,
+                    AiRouteSearchFailure.None,
+                    30,
+                    30,
+                    0,
+                    null,
+                    null,
+                    AiPursuitLaneEvaluationReason.InsufficientPreparationDistance)
+                {
+                    Motivation = AiPursuitLaneMotivation.TargetLaneAlignment,
+                    PhysicalRelation = AiPursuitLanePhysicalRelation.ImmediateRight
+                }
+            ]
+        };
+
+        var diagnostic = new AiPursuitLaneDiagnosticTracker().PublishEvaluation(
+            0, 99, 4, evaluation);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(diagnostic!.ToPointId, Is.EqualTo(20));
+            Assert.That(diagnostic.Direction, Is.EqualTo(AiLaneChangeDirection.Right));
+            Assert.That(diagnostic.Motivation,
+                Is.EqualTo(AiPursuitLaneMotivation.TargetLaneAlignment));
+            Assert.That(diagnostic.PhysicalRelation,
+                Is.EqualTo(AiPursuitLanePhysicalRelation.ImmediateRight));
+        });
+    }
+
+    [Test]
+    public void PhysicalCapacityEvidenceIsPublishedForRejectedSelection()
+    {
+        var evaluation = Evaluation(
+            0,
+            junctionId: null,
+            motivation: AiPursuitLaneMotivation.TargetLaneAlignment) with
+        {
+            Reason = AiPursuitLaneEvaluationReason.InsufficientPreparationDistance,
+            RequiredTransitionDistanceMeters = 60,
+            SourceAvailableDistanceMeters = 50,
+            DestinationAvailableDistanceMeters = 60
+        };
+
+        var diagnostic = new AiPursuitLaneDiagnosticTracker().PublishEvaluation(
+            0, 99, 4, evaluation);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(diagnostic!.RequiredTransitionDistanceMeters, Is.EqualTo(60));
+            Assert.That(diagnostic.SourceAvailableDistanceMeters, Is.EqualTo(50));
+            Assert.That(diagnostic.DestinationAvailableDistanceMeters, Is.EqualTo(60));
+            Assert.That(diagnostic.DistanceToDecisionMeters, Is.Null);
+            Assert.That(diagnostic.Motivation,
+                Is.EqualTo(AiPursuitLaneMotivation.TargetLaneAlignment));
+        });
+    }
+
     private static AiPursuitLaneSelectionResult EvaluationWithSecondCandidate(
         int secondJunction)
     {
@@ -211,7 +290,9 @@ public class AiPursuitLaneDiagnosticsTests
             600,
             1,
             junctionId,
-            distanceToDecision,
+            motivation == AiPursuitLaneMotivation.TargetLaneAlignment
+                ? null
+                : distanceToDecision,
             AiPursuitLaneEvaluationReason.RoutePreparation);
         var plan = new AiRoutePlan(
             600,
@@ -226,7 +307,9 @@ public class AiPursuitLaneDiagnosticsTests
                 10,
                 AiLaneChangeDirection.Left,
                 plan,
-                distanceToDecision)
+                motivation == AiPursuitLaneMotivation.TargetLaneAlignment
+                    ? null
+                    : distanceToDecision)
             {
                 JunctionId = junctionId,
                 Motivation = motivation,

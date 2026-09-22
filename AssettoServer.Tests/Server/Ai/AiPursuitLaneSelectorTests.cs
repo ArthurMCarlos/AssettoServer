@@ -163,7 +163,12 @@ public class AiPursuitLaneSelectorTests
 
         var result = selector.SelectForRoutePreparation(0, Targets, Limits, 60, 1000);
 
-        Assert.That(result.Reason, Is.EqualTo(AiPursuitLaneEvaluationReason.NoRealJunction));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Reason, Is.EqualTo(AiPursuitLaneEvaluationReason.NoRealJunction));
+            Assert.That(result.CandidateLaneRoutes.Single(route => route.PointId == 10).Motivation,
+                Is.EqualTo(AiPursuitLaneMotivation.FutureJunction));
+        });
     }
 
     [Test]
@@ -298,6 +303,22 @@ public class AiPursuitLaneSelectorTests
         Assert.That(result.Kind, Is.EqualTo(AiPursuitLaneSelectionKind.Unreachable));
         Assert.That(result.Candidates.Single(candidate => candidate.PointId == 10).Rejection,
             Is.EqualTo(AiPursuitLaneRejectionReason.BeyondLookahead));
+    }
+
+    [Test]
+    public void AlignmentRejectionKeepsItsMotivationInCandidateEvidence()
+    {
+        var selector = CreateSelector(new Dictionary<int, AiRoutePlan?>
+        {
+            [0] = null,
+            [10] = Plan(10, 99, 1001),
+            [20] = null
+        });
+
+        var result = selector.SelectForAlignment(0, Targets, Limits, 60, 1000);
+
+        Assert.That(result.CandidateLaneRoutes.Single(route => route.PointId == 10).Motivation,
+            Is.EqualTo(AiPursuitLaneMotivation.TargetLaneAlignment));
     }
 
     [Test]

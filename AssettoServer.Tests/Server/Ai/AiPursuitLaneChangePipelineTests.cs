@@ -61,6 +61,58 @@ public class AiPursuitLaneChangePipelineTests
     }
 
     [Test]
+    public void ShortAnchorAlignmentPreparesWhenBothSplinesHaveTransitionCapacity()
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        var pipeline = CreateShortAnchorPipeline(controller, 30, 100, 100);
+
+        var result = pipeline.Evaluate(
+            0, 0, 100, ActiveFallback(), null,
+            new AiPursuitLaneChangeOptions(true, 60, 3000, 1000),
+            new AiRouteSearchLimits(20_000, 50_000),
+            100);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.RequestPrepared, Is.True);
+            Assert.That(result.Evaluation.Selection!.Motivation,
+                Is.EqualTo(AiPursuitLaneMotivation.TargetLaneAlignment));
+            Assert.That(result.Evaluation.Selection.DistanceToDecisionMeters, Is.Null);
+            Assert.That(result.ControllerPhase, Is.EqualTo(AiLaneChangePhase.WaitingForGap));
+        });
+    }
+
+    [TestCase(50f, 100f)]
+    [TestCase(100f, 50f)]
+    public void ShortAnchorAlignmentRejectsInsufficientPhysicalTransitionCapacity(
+        float sourceLength,
+        float destinationLength)
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        var pipeline = CreateShortAnchorPipeline(
+            controller, 30, sourceLength, destinationLength);
+
+        var result = pipeline.Evaluate(
+            0, 0, sourceLength, ActiveFallback(), null,
+            new AiPursuitLaneChangeOptions(true, 60, 3000, 1000),
+            new AiRouteSearchLimits(20_000, 50_000),
+            100);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.RequestPrepared, Is.False);
+            Assert.That(result.Evaluation.Reason,
+                Is.EqualTo(AiPursuitLaneEvaluationReason.InsufficientPreparationDistance));
+            Assert.That(result.Evaluation.RequiredTransitionDistanceMeters, Is.EqualTo(60));
+            Assert.That(result.Evaluation.SourceAvailableDistanceMeters,
+                Is.EqualTo(Math.Min(sourceLength, 60)));
+            Assert.That(result.Evaluation.DestinationAvailableDistanceMeters,
+                Is.EqualTo(Math.Min(destinationLength, 60)));
+            Assert.That(result.ControllerPhase, Is.EqualTo(AiLaneChangePhase.None));
+        });
+    }
+
+    [Test]
     public void PendingAlignmentDoesNotSkipPastImmediateNeighbor()
     {
         var plannedStarts = new List<int>();
@@ -223,6 +275,35 @@ public class AiPursuitLaneChangePipelineTests
                 ? new AiPursuitLaneDecision(2, 420)
                 : null);
         return new AiPursuitLaneChangePipeline(selector, controller, Cursor, _ => 1000);
+    }
+
+    private static AiPursuitLaneChangePipeline CreateShortAnchorPipeline(
+        AiLaneChangeController controller,
+        float routeDistance,
+        float sourceLength,
+        float destinationLength)
+    {
+        var selector = new AiPursuitLaneSelector(
+            _ => new AiAdjacentLanePoints(10, -1),
+            (_, _) => true,
+            (start, targets, _) => start == 10 && targets.Contains(99)
+                ? Search(Plan(10, 99, routeDistance))
+                : Search(null));
+        AiSplineCursor CreateCursor(int pointId, float progress) =>
+            new(
+                pointId,
+                progress,
+                _ => null,
+                current => current == 0 ? sourceLength : destinationLength,
+                (current, distance) => new AiSplinePose(
+                    new Vector3(0, 0, current * 1000 + distance),
+                    Vector3.UnitZ));
+
+        return new AiPursuitLaneChangePipeline(
+            selector,
+            controller,
+            CreateCursor,
+            pointId => pointId == 0 ? sourceLength : destinationLength);
     }
 
     private static AiPursuitNavigationResult ActiveFallback()

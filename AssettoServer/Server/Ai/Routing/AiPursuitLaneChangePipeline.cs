@@ -91,10 +91,27 @@ internal sealed class AiPursuitLaneChangePipeline
             ? destinationLength * (currentProgressMeters / currentSegmentLengthMeters)
             : 0;
         var destinationCursor = _createCursor(selection.ToPointId, destinationProgress);
-        if (selection.DistanceToDecisionMeters!.Value - destinationProgress < options.DistanceMeters
-            || !sourceCursor.CanAdvance(options.DistanceMeters)
-            || !destinationCursor.CanAdvance(options.DistanceMeters))
+        var sourceAvailableDistance = sourceCursor.GetAvailableDistance(options.DistanceMeters);
+        var destinationAvailableDistance =
+            destinationCursor.GetAvailableDistance(options.DistanceMeters);
+        evaluation = evaluation with
         {
+            RequiredTransitionDistanceMeters = options.DistanceMeters,
+            SourceAvailableDistanceMeters = sourceAvailableDistance,
+            DestinationAvailableDistanceMeters = destinationAvailableDistance
+        };
+        var decisionIsTooClose = selection.Motivation == AiPursuitLaneMotivation.FutureJunction
+            && (!selection.DistanceToDecisionMeters.HasValue
+                || selection.DistanceToDecisionMeters.Value - destinationProgress
+                    < options.DistanceMeters);
+        if (decisionIsTooClose
+            || sourceAvailableDistance < options.DistanceMeters
+            || destinationAvailableDistance < options.DistanceMeters)
+        {
+            evaluation = evaluation with
+            {
+                Reason = AiPursuitLaneEvaluationReason.InsufficientPreparationDistance
+            };
             return Result(navigation, evaluation, false);
         }
 

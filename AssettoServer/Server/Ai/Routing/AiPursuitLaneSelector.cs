@@ -94,6 +94,7 @@ public sealed record AiPursuitLaneRouteDiagnostic(
     AiPursuitLaneEvaluationReason Reason)
 {
     public AiPursuitLanePhysicalRelation? PhysicalRelation { get; init; }
+    public AiPursuitLaneMotivation? Motivation { get; init; }
 }
 
 public sealed record AiPursuitLaneSelectionResult(
@@ -104,6 +105,9 @@ public sealed record AiPursuitLaneSelectionResult(
     public AiPursuitLaneEvaluationReason Reason { get; init; }
     public AiPursuitLaneRouteDiagnostic CurrentLaneRoute { get; init; } = null!;
     public IReadOnlyList<AiPursuitLaneRouteDiagnostic> CandidateLaneRoutes { get; init; } = [];
+    public float? RequiredTransitionDistanceMeters { get; init; }
+    public float? SourceAvailableDistanceMeters { get; init; }
+    public float? DestinationAvailableDistanceMeters { get; init; }
 }
 
 public sealed class AiPursuitLaneSelector
@@ -411,7 +415,10 @@ public sealed class AiPursuitLaneSelector
                 null, direction, AiPursuitLaneRejectionReason.MissingNeighbor));
             routeDiagnostics.Add(new AiPursuitLaneRouteDiagnostic(
                 null, direction, AiRouteSearchFailure.InvalidRequest, null, 0, 0,
-                null, null, AiPursuitLaneEvaluationReason.NoAdjacentLane));
+                null, null, AiPursuitLaneEvaluationReason.NoAdjacentLane)
+            {
+                Motivation = AiPursuitLaneMotivation.TargetLaneAlignment
+            });
             return;
         }
 
@@ -421,7 +428,10 @@ public sealed class AiPursuitLaneSelector
                 adjacentPointId, direction, AiPursuitLaneRejectionReason.OppositeDirection));
             routeDiagnostics.Add(new AiPursuitLaneRouteDiagnostic(
                 adjacentPointId, direction, AiRouteSearchFailure.InvalidRequest, null, 0, 0,
-                null, null, AiPursuitLaneEvaluationReason.OppositeDirection));
+                null, null, AiPursuitLaneEvaluationReason.OppositeDirection)
+            {
+                Motivation = AiPursuitLaneMotivation.TargetLaneAlignment
+            });
             return;
         }
 
@@ -441,7 +451,8 @@ public sealed class AiPursuitLaneSelector
                 adjacentPointId, direction, AiRouteSearchFailure.InvalidRequest, null, 0, 0,
                 null, null, reason)
             {
-                PhysicalRelation = physicalRelation
+                PhysicalRelation = physicalRelation,
+                Motivation = AiPursuitLaneMotivation.TargetLaneAlignment
             });
             return;
         }
@@ -453,7 +464,8 @@ public sealed class AiPursuitLaneSelector
                 adjacentPointId, direction, AiPursuitLaneRejectionReason.NoForwardRoute));
             routeDiagnostics.Add(CreateRouteDiagnostic(
                 adjacentPointId, direction, route, null,
-                AiPursuitLaneEvaluationReason.NoForwardRoute));
+                AiPursuitLaneEvaluationReason.NoForwardRoute,
+                AiPursuitLaneMotivation.TargetLaneAlignment));
             return;
         }
 
@@ -464,14 +476,16 @@ public sealed class AiPursuitLaneSelector
                 adjacentPointId, direction, AiPursuitLaneRejectionReason.BeyondLookahead));
             routeDiagnostics.Add(CreateRouteDiagnostic(
                 adjacentPointId, direction, route, null,
-                AiPursuitLaneEvaluationReason.BeyondLookahead));
+                AiPursuitLaneEvaluationReason.BeyondLookahead,
+                AiPursuitLaneMotivation.TargetLaneAlignment));
             return;
         }
 
         diagnostics.Add(new AiPursuitLaneCandidateDiagnostic(adjacentPointId, direction, null));
         routeDiagnostics.Add(CreateRouteDiagnostic(
             adjacentPointId, direction, route, null,
-            AiPursuitLaneEvaluationReason.RoutePreparation));
+            AiPursuitLaneEvaluationReason.RoutePreparation,
+            AiPursuitLaneMotivation.TargetLaneAlignment));
         selections.Add(new AiPursuitLaneSelection(
             currentPointId,
             adjacentPointId,
@@ -511,7 +525,10 @@ public sealed class AiPursuitLaneSelector
                 0,
                 null,
                 null,
-                AiPursuitLaneEvaluationReason.NoAdjacentLane));
+                AiPursuitLaneEvaluationReason.NoAdjacentLane)
+            {
+                Motivation = AiPursuitLaneMotivation.FutureJunction
+            });
             return;
         }
 
@@ -530,7 +547,10 @@ public sealed class AiPursuitLaneSelector
                 0,
                 null,
                 null,
-                AiPursuitLaneEvaluationReason.OppositeDirection));
+                AiPursuitLaneEvaluationReason.OppositeDirection)
+            {
+                Motivation = AiPursuitLaneMotivation.FutureJunction
+            });
             return;
         }
 
@@ -550,7 +570,8 @@ public sealed class AiPursuitLaneSelector
                 adjacentPointId, direction, AiRouteSearchFailure.InvalidRequest, null, 0, 0,
                 null, null, reason)
             {
-                PhysicalRelation = physicalRelation
+                PhysicalRelation = physicalRelation,
+                Motivation = AiPursuitLaneMotivation.FutureJunction
             });
             return;
         }
@@ -567,7 +588,8 @@ public sealed class AiPursuitLaneSelector
                 direction,
                 route,
                 null,
-                AiPursuitLaneEvaluationReason.NoForwardRoute));
+                AiPursuitLaneEvaluationReason.NoForwardRoute,
+                AiPursuitLaneMotivation.FutureJunction));
             return;
         }
 
@@ -583,7 +605,8 @@ public sealed class AiPursuitLaneSelector
                 direction,
                 route,
                 null,
-                AiPursuitLaneEvaluationReason.NoRealJunction));
+                AiPursuitLaneEvaluationReason.NoRealJunction,
+                AiPursuitLaneMotivation.FutureJunction));
             return;
         }
 
@@ -599,7 +622,8 @@ public sealed class AiPursuitLaneSelector
                 direction,
                 route,
                 decision,
-                AiPursuitLaneEvaluationReason.InsufficientPreparationDistance));
+                AiPursuitLaneEvaluationReason.InsufficientPreparationDistance,
+                AiPursuitLaneMotivation.FutureJunction));
             return;
         }
         if (distanceToDecision > lookaheadMeters)
@@ -613,7 +637,8 @@ public sealed class AiPursuitLaneSelector
                 direction,
                 route,
                 decision,
-                AiPursuitLaneEvaluationReason.BeyondLookahead));
+                AiPursuitLaneEvaluationReason.BeyondLookahead,
+                AiPursuitLaneMotivation.FutureJunction));
             return;
         }
 
@@ -626,7 +651,8 @@ public sealed class AiPursuitLaneSelector
             direction,
             route,
             decision,
-            AiPursuitLaneEvaluationReason.RoutePreparation));
+            AiPursuitLaneEvaluationReason.RoutePreparation,
+            AiPursuitLaneMotivation.FutureJunction));
         selections.Add(new AiPursuitLaneSelection(
             currentPointId,
             adjacentPointId,
@@ -657,7 +683,8 @@ public sealed class AiPursuitLaneSelector
         AiLaneChangeDirection? direction,
         AiRouteSearchResult route,
         AiPursuitLaneDecision? decision,
-        AiPursuitLaneEvaluationReason reason) =>
+        AiPursuitLaneEvaluationReason reason,
+        AiPursuitLaneMotivation? motivation = null) =>
         new(
             pointId,
             direction,
@@ -669,7 +696,8 @@ public sealed class AiPursuitLaneSelector
             decision?.DistanceMeters,
             reason)
         {
-            PhysicalRelation = direction.HasValue ? Relation(direction.Value) : null
+            PhysicalRelation = direction.HasValue ? Relation(direction.Value) : null,
+            Motivation = motivation
         };
 
     private static AiPursuitLanePhysicalRelation Relation(AiLaneChangeDirection direction) =>

@@ -40,4 +40,37 @@ public class AiSplineCursorTests
         Assert.That(cursor.PointId, Is.Zero);
         Assert.That(cursor.SegmentProgressMeters, Is.EqualTo(5));
     }
+
+    [Test]
+    public void MeasuresAvailableDistanceUpToRequestedLimitWithoutMutation()
+    {
+        var cursor = new AiSplineCursor(
+            0,
+            5,
+            point => point == 0 ? 1 : null,
+            _ => 20,
+            (_, _) => new AiSplinePose(Vector3.Zero, Vector3.UnitX));
+
+        var available = cursor.GetAvailableDistance(60);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(available, Is.EqualTo(35));
+            Assert.That(cursor.PointId, Is.Zero);
+            Assert.That(cursor.SegmentProgressMeters, Is.EqualTo(5));
+        });
+    }
+
+    [Test]
+    public void AvailableDistanceIsCappedAtRequestedLimit()
+    {
+        var cursor = new AiSplineCursor(
+            0,
+            5,
+            point => point < 10 ? point + 1 : null,
+            _ => 20,
+            (_, _) => new AiSplinePose(Vector3.Zero, Vector3.UnitX));
+
+        Assert.That(cursor.GetAvailableDistance(60), Is.EqualTo(60));
+    }
 }

@@ -67,5 +67,32 @@ public sealed class AiSplineCursor
         return true;
     }
 
+    public float GetAvailableDistance(float maximumDistanceMeters)
+    {
+        if (!float.IsFinite(maximumDistanceMeters) || maximumDistanceMeters < 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumDistanceMeters));
+
+        var pointId = PointId;
+        var progress = SegmentProgressMeters;
+        var available = 0f;
+        while (available < maximumDistanceMeters)
+        {
+            var segmentRemaining = Math.Max(0, _getSegmentLength(pointId) - progress);
+            var requestedRemaining = maximumDistanceMeters - available;
+            if (segmentRemaining >= requestedRemaining)
+                return maximumDistanceMeters;
+
+            available += segmentRemaining;
+            var next = _getNext(pointId);
+            if (!next.HasValue)
+                return available;
+
+            pointId = next.Value;
+            progress = 0;
+        }
+
+        return maximumDistanceMeters;
+    }
+
     public AiSplinePose Evaluate() => _evaluate(PointId, SegmentProgressMeters);
 }

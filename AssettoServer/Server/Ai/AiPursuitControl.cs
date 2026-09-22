@@ -80,6 +80,9 @@ public sealed record AiPursuitLaneChangeDiagnostics(
     public AiPursuitLaneRouteDiagnostic? CurrentLaneRoute { get; init; }
     public IReadOnlyList<AiPursuitLaneRouteDiagnostic> CandidateLaneRoutes { get; init; } = [];
     public AiLaneChangeSafetyStatus? SafetyStatus { get; init; }
+    public float? RequiredTransitionDistanceMeters { get; init; }
+    public float? SourceAvailableDistanceMeters { get; init; }
+    public float? DestinationAvailableDistanceMeters { get; init; }
 }
 
 public enum AiPursuitLaneChangeDiagnosticReason

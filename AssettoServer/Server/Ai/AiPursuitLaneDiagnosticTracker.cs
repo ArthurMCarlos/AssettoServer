@@ -18,7 +18,9 @@ public sealed class AiPursuitLaneDiagnosticTracker
         ArgumentNullException.ThrowIfNull(evaluation);
         var selection = evaluation.Selection;
         var candidate = selection == null
-            ? evaluation.CandidateLaneRoutes.FirstOrDefault()
+            ? evaluation.CandidateLaneRoutes.FirstOrDefault(route =>
+                  route.Reason == evaluation.Reason)
+              ?? evaluation.CandidateLaneRoutes.FirstOrDefault()
             : null;
         var reason = MapReason(evaluation.Reason);
         var key = new SemanticKey(
@@ -28,7 +30,7 @@ public sealed class AiPursuitLaneDiagnosticTracker
             selection?.ToPointId ?? candidate?.PointId,
             selection?.Direction ?? candidate?.Direction,
             selection?.JunctionId ?? candidate?.JunctionId,
-            selection?.Motivation,
+            selection?.Motivation ?? candidate?.Motivation,
             selection?.PhysicalRelation ?? candidate?.PhysicalRelation,
             null,
             AiPursuitLaneChangeEventKind.Evaluated,
@@ -50,10 +52,13 @@ public sealed class AiPursuitLaneDiagnosticTracker
             PolicePointId = policePointId,
             PreferredPhysicalTargetPointId = preferredPhysicalTargetPointId,
             JunctionId = selection?.JunctionId ?? candidate?.JunctionId,
-            Motivation = selection?.Motivation,
+            Motivation = selection?.Motivation ?? candidate?.Motivation,
             PhysicalRelation = selection?.PhysicalRelation ?? candidate?.PhysicalRelation,
             CurrentLaneRoute = evaluation.CurrentLaneRoute,
-            CandidateLaneRoutes = evaluation.CandidateLaneRoutes
+            CandidateLaneRoutes = evaluation.CandidateLaneRoutes,
+            RequiredTransitionDistanceMeters = evaluation.RequiredTransitionDistanceMeters,
+            SourceAvailableDistanceMeters = evaluation.SourceAvailableDistanceMeters,
+            DestinationAvailableDistanceMeters = evaluation.DestinationAvailableDistanceMeters
         };
     }
 
