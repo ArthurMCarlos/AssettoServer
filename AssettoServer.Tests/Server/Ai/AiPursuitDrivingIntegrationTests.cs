@@ -5,6 +5,16 @@ namespace AssettoServer.Tests.Server.Ai;
 [TestFixture]
 public class AiPursuitDrivingIntegrationTests
 {
+    private static readonly AiPursuitDrivingOptions DrivingOptions = new(
+        Enabled: true,
+        ContactEnabled: true,
+        CatchUpDistanceMeters: 100,
+        CloseDistanceMeters: 15,
+        ContactDistanceMeters: 3,
+        MaximumSpeedMetersPerSecond: 50,
+        MaximumClosingSpeedMetersPerSecond: 35 / 3.6f,
+        ContactClosingSpeedMetersPerSecond: 5 / 3.6f);
+
     [Test]
     public void PhysicalClearanceSubtractsPoliceFrontAndTargetRearLengths()
     {
@@ -132,4 +142,92 @@ public class AiPursuitDrivingIntegrationTests
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             AiPursuitControl.ValidateTrackingOptions(options));
     }
+
+    [TestCase((byte)10, true, true, (byte)10, true)]
+    [TestCase((byte)10, true, true, (byte)11, false)]
+    [TestCase(null, false, false, (byte)10, false)]
+    [TestCase((byte)10, true, false, (byte)10, false)]
+    public void CollisionDispositionRequiresLivePursuitForExactSender(
+        byte? pursuitTargetSessionId,
+        bool aggressiveDrivingEnabled,
+        bool hasDrivingState,
+        byte senderSessionId,
+        bool expectedRecovery)
+    {
+        var disposition = AiPursuitControl.ResolveCollisionDisposition(
+            pursuitTargetSessionId,
+            aggressiveDrivingEnabled,
+            hasDrivingState,
+            senderSessionId);
+
+        Assert.That(disposition, Is.EqualTo(expectedRecovery
+            ? AiCollisionDisposition.PursuitRecovery
+            : AiCollisionDisposition.NativeStop));
+    }
+
+    [Test]
+    public void CollisionRecoveryPreservesRouteAndReturnsRecoveryDiagnostics()
+    {
+        var controller = new AiPursuitDrivingController();
+        var active = controller.Update(DrivingRequest(2, 1, routeRevision: 7));
+        var collision = controller.ReportCollision(active.State, nowMilliseconds: 1000);
+
+        var recovery = controller.Update(DrivingRequest(
+            2,
+            1,
+            routeRevision: 7,
+            previous: collision));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovery.Diagnostics.State, Is.EqualTo(AiPursuitDrivingState.Recovery));
+            Assert.That(recovery.Diagnostics.Reason, Is.EqualTo(AiPursuitDrivingReason.CollisionRecovery));
+            Assert.That(recovery.Diagnostics.CollisionReported, Is.True);
+            Assert.That(recovery.State.RouteRevision, Is.EqualTo(7));
+        });
+    }
+
+    [Test]
+    public void RecoveryReturnsToClosePressureWhenPhysicalClearanceReopens()
+    {
+        var controller = new AiPursuitDrivingController();
+        var active = controller.Update(DrivingRequest(2, 1));
+        var collision = controller.ReportCollision(active.State, nowMilliseconds: 1000);
+
+        var recovered = controller.Update(DrivingRequest(6, 6, previous: collision));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered.Diagnostics.State, Is.EqualTo(AiPursuitDrivingState.ClosePressure));
+            Assert.That(recovered.Diagnostics.CollisionReported, Is.False);
+        });
+    }
+
+    [Test]
+    public void RecoveryReturnsDirectlyToCatchUpWhenTargetOpensDistance()
+    {
+        var controller = new AiPursuitDrivingController();
+        var active = controller.Update(DrivingRequest(2, 1));
+        var collision = controller.ReportCollision(active.State, nowMilliseconds: 1000);
+
+        var recovered = controller.Update(DrivingRequest(150, 140, previous: collision));
+
+        Assert.That(recovered.Diagnostics.State, Is.EqualTo(AiPursuitDrivingState.CatchUp));
+    }
+
+    private static AiPursuitDrivingRequest DrivingRequest(
+        float routeDistance,
+        float clearance,
+        long routeRevision = 1,
+        AiPursuitDrivingControllerState? previous = null) =>
+        new(
+            DrivingOptions,
+            routeDistance,
+            clearance,
+            TargetSpeedMetersPerSecond: 20,
+            PoliceSpeedMetersPerSecond: 20,
+            AiLaneChangePhase.None,
+            routeRevision,
+            NowMilliseconds: 1500,
+            previous);
 }

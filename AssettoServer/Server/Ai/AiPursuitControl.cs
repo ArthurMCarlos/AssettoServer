@@ -51,6 +51,12 @@ public enum AiPursuitDrivingReason
     CollisionRecovery
 }
 
+internal enum AiCollisionDisposition
+{
+    PursuitRecovery,
+    NativeStop
+}
+
 public sealed record AiPursuitDrivingOptions(
     bool Enabled,
     bool ContactEnabled,
@@ -204,6 +210,17 @@ public static class AiPursuitControl
         aggressiveDrivingEnabled
         && pursuitTargetSessionId.HasValue
         && pursuitTargetSessionId.Value == obstacleSessionId;
+
+    internal static AiCollisionDisposition ResolveCollisionDisposition(
+        byte? pursuitTargetSessionId,
+        bool aggressiveDrivingEnabled,
+        bool hasDrivingState,
+        byte senderSessionId) =>
+        aggressiveDrivingEnabled
+        && hasDrivingState
+        && pursuitTargetSessionId == senderSessionId
+            ? AiCollisionDisposition.PursuitRecovery
+            : AiCollisionDisposition.NativeStop;
 
     public static float? ResolvePlayerObstacleSpeed(
         float currentSpeed,

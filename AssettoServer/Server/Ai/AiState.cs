@@ -455,18 +455,20 @@ public class AiState
         while (true)
         {
             var current = Volatile.Read(ref _pursuit);
-            if (current?.TargetSessionId != targetSessionId
-                || current.Options.Driving is not { Enabled: true }
-                || current.DrivingState == null
-                || current.DrivingDiagnostics == null)
+            var disposition = AiPursuitControl.ResolveCollisionDisposition(
+                current?.TargetSessionId,
+                current?.Options.Driving is { Enabled: true },
+                current?.DrivingState != null && current.DrivingDiagnostics != null,
+                targetSessionId);
+            if (disposition != AiCollisionDisposition.PursuitRecovery)
             {
                 return false;
             }
 
             var collisionState = _pursuitDrivingController.ReportCollision(
-                current.DrivingState,
+                current!.DrivingState!,
                 _sessionManager.ServerTimeMilliseconds);
-            var collisionDiagnostics = current.DrivingDiagnostics with
+            var collisionDiagnostics = current.DrivingDiagnostics! with
             {
                 Revision = collisionState.DiagnosticRevision,
                 State = collisionState.State,
