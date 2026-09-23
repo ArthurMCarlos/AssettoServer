@@ -66,7 +66,34 @@ public sealed record AiPursuitDrivingOptions(
     float ContactDistanceMeters,
     float MaximumSpeedMetersPerSecond,
     float MaximumClosingSpeedMetersPerSecond,
-    float ContactClosingSpeedMetersPerSecond);
+    float ContactClosingSpeedMetersPerSecond,
+    AiPursuitPitOptions? Pit = null);
+
+public sealed record AiPursuitPitOptions(
+    bool Enabled,
+    float MaxDistanceMeters,
+    float MaxClosingSpeedMetersPerSecond,
+    float LateralOffsetMeters,
+    int CommitMilliseconds,
+    int CooldownMilliseconds);
+
+public enum AiPursuitPitPhase { Idle, Armed, Attempting, Cooldown }
+public enum AiPursuitPitSide { Left, Right }
+public enum AiPursuitPitEventKind { Armed, Started, Aborted, Contact }
+public enum AiPursuitPitAbortReason
+{
+    None, Disabled, RouteLost, TargetChanged, OutOfRange, ClosingSpeedUnsafe,
+    BlockedSide, LaneChange, Junction, Recovery, GeometryInvalid, CommitElapsed
+}
+
+public sealed record AiPursuitPitDiagnostics(
+    long Revision,
+    AiPursuitPitEventKind EventKind,
+    AiPursuitPitSide? Side,
+    AiPursuitPitAbortReason Reason,
+    float PhysicalClearanceMeters,
+    float ClosingSpeedMetersPerSecond,
+    float OffsetMeters);
 
 public sealed record AiPursuitDrivingDiagnostics(
     long Revision,
@@ -114,7 +141,8 @@ public sealed record AiPursuitTrackingResult(
     AiPursuitRouteDiagnostics? RouteDiagnostics = null,
     AiPursuitSearchDiagnostics? SearchDiagnostics = null,
     AiPursuitLaneChangeDiagnostics? LaneChangeDiagnostics = null,
-    AiPursuitDrivingDiagnostics? DrivingDiagnostics = null);
+    AiPursuitDrivingDiagnostics? DrivingDiagnostics = null,
+    AiPursuitPitDiagnostics? PitDiagnostics = null);
 
 public sealed record AiPursuitLaneChangeDiagnostics(
     long Revision,
@@ -171,7 +199,9 @@ internal sealed record AiPursuitSnapshot(
     AiPursuitRouteState NavigationState,
     float? DesiredSpeedMetersPerSecond,
     AiPursuitDrivingControllerState? DrivingState = null,
-    AiPursuitDrivingDiagnostics? DrivingDiagnostics = null);
+    AiPursuitDrivingDiagnostics? DrivingDiagnostics = null,
+    AiPursuitPitControllerState? PitState = null,
+    AiPursuitPitDiagnostics? PitDiagnostics = null);
 
 internal sealed class AiPursuitUpdateGate
 {
@@ -255,6 +285,11 @@ public static class AiPursuitControl
         AiPursuitDrivingDiagnostics? previous,
         AiPursuitDrivingDiagnostics? current) =>
         previous?.CollisionReported == true ? previous : current;
+
+    internal static AiPursuitPitDiagnostics? SelectPitDiagnosticsForDelivery(
+        AiPursuitPitDiagnostics? previous,
+        AiPursuitPitDiagnostics? current) =>
+        previous?.EventKind == AiPursuitPitEventKind.Contact ? previous : current;
 
     internal static AiCollisionDisposition ResolveCollisionDisposition(
         byte? pursuitTargetSessionId,
@@ -425,6 +460,25 @@ public static class AiPursuitControl
                 > options.MaximumClosingSpeedMetersPerSecond)
         {
             throw new ArgumentOutOfRangeException(nameof(options));
+        }
+        if (options.Pit is { Enabled: true } pit
+            && (!options.Enabled
+                || !options.ContactEnabled
+                || !float.IsFinite(pit.MaxDistanceMeters)
+                || pit.MaxDistanceMeters <= options.ContactDistanceMeters
+                || pit.MaxDistanceMeters > options.CloseDistanceMeters
+                || !float.IsFinite(pit.MaxClosingSpeedMetersPerSecond)
+                || pit.MaxClosingSpeedMetersPerSecond <= 0
+                || pit.MaxClosingSpeedMetersPerSecond > options.MaximumClosingSpeedMetersPerSecond
+                || !float.IsFinite(pit.LateralOffsetMeters)
+                || pit.LateralOffsetMeters <= 0
+                || pit.LateralOffsetMeters > 1.1f
+                || pit.CommitMilliseconds < 200
+                || pit.CommitMilliseconds > 5000
+                || pit.CooldownMilliseconds < 0
+                || pit.CooldownMilliseconds > 30000))
+        {
+            throw new ArgumentOutOfRangeException(nameof(options.Pit));
         }
     }
 }

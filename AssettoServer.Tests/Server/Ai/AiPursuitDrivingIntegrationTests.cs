@@ -196,6 +196,31 @@ public class AiPursuitDrivingIntegrationTests
             AiPursuitControl.ValidateTrackingOptions(options));
     }
 
+    [Test]
+    public void CoreRejectsPitWithoutAggressiveContact()
+    {
+        var options = DrivingOptions with
+        {
+            ContactEnabled = false,
+            Pit = new AiPursuitPitOptions(true, 6, 10 / 3.6f, 0.8f, 1200, 3000)
+        };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AiPursuitControl.ValidateDrivingOptions(options));
+    }
+
+    [Test]
+    public void CoreRejectsPitOffsetThatExceedsConservativeLaneAllowance()
+    {
+        var options = DrivingOptions with
+        {
+            Pit = new AiPursuitPitOptions(true, 6, 10 / 3.6f, 1.2f, 1200, 3000)
+        };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AiPursuitControl.ValidateDrivingOptions(options));
+    }
+
     [TestCase((byte)10, true, true, (byte)10, true)]
     [TestCase((byte)10, true, true, (byte)11, false)]
     [TestCase(null, false, false, (byte)10, false)]
@@ -329,6 +354,26 @@ public class AiPursuitDrivingIntegrationTests
         {
             resumeTracking.Set();
         }
+    }
+
+    [Test]
+    public void PitContactIsDeliveredOnceAcrossNextTrackingUpdate()
+    {
+        var contact = new AiPursuitPitDiagnostics(3,
+            AiPursuitPitEventKind.Contact, AiPursuitPitSide.Left,
+            AiPursuitPitAbortReason.None, 3, 1, .8f);
+        var next = new AiPursuitPitDiagnostics(4,
+            AiPursuitPitEventKind.Armed, AiPursuitPitSide.Right,
+            AiPursuitPitAbortReason.None, 4, 1, 0);
+        Assert.Multiple(() =>
+        {
+            Assert.That(AiPursuitControl.SelectPitDiagnosticsForDelivery(contact, null),
+                Is.EqualTo(contact));
+            Assert.That(AiPursuitControl.SelectPitDiagnosticsForDelivery(contact, next),
+                Is.EqualTo(contact));
+            Assert.That(AiPursuitControl.SelectPitDiagnosticsForDelivery(null, next),
+                Is.EqualTo(next));
+        });
     }
 
     private static AiPursuitDrivingRequest DrivingRequest(

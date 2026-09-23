@@ -74,12 +74,15 @@ public class AiState
     private readonly JunctionEvaluator _junctionEvaluator;
     private readonly AiPursuitNavigator _pursuitNavigator;
     private readonly AiPursuitDrivingController _pursuitDrivingController = new();
+    private readonly AiPursuitPitController _pursuitPitController = new();
     private readonly AiPursuitLaneSelector _laneSelector;
     private AiLaneChangeController? _laneChangeController;
     private AiPursuitLaneChangePipeline? _laneChangePipeline;
     private readonly AiPursuitLaneDiagnosticTracker _laneDiagnosticTracker = new();
     private readonly AiPursuitUpdateGate _pursuitUpdateGate = new();
     private AiPursuitSnapshot? _pursuit;
+    private float _pitOffsetMeters;
+    private Vector3 _lastPitForward;
 
     private static readonly List<Color> CarColors =
     [
@@ -124,6 +127,8 @@ public class AiState
     public void Despawn()
     {
         ReleasePursuit();
+        Volatile.Write(ref _pitOffsetMeters, 0);
+        _lastPitForward = Vector3.Zero;
         Initialized = false;
         _spline.SlowestAiStates.Leave(CurrentSplinePointId, this);
     }
@@ -182,11 +187,14 @@ public class AiState
                         previous.NavigationState.Revision,
                         _sessionManager.ServerTimeMilliseconds,
                         previous.DrivingState));
+                var pitFallback = UpdateUnavailablePit(previous);
                 Interlocked.Exchange(ref _pursuit, previous with
                 {
                     DesiredSpeedMetersPerSecond = fallback.RequestedSpeedMetersPerSecond,
                     DrivingState = fallback.State,
-                    DrivingDiagnostics = fallback.Diagnostics
+                    DrivingDiagnostics = fallback.Diagnostics,
+                    PitState = pitFallback?.State,
+                    PitDiagnostics = pitFallback?.Diagnostics
                 });
                 return new AiPursuitTrackingResult(
                     AiPursuitTrackingStatus.RouteTemporarilyUnavailable,
@@ -194,7 +202,22 @@ public class AiState
                     0,
                     DrivingDiagnostics: AiPursuitControl.SelectDrivingDiagnosticsForDelivery(
                         previous.DrivingDiagnostics,
-                        fallback.Diagnostics));
+                        fallback.Diagnostics),
+                    PitDiagnostics: AiPursuitControl.SelectPitDiagnosticsForDelivery(
+                        previous.PitDiagnostics, pitFallback?.Diagnostics));
+            }
+
+            if (previous?.PitState is { Phase: AiPursuitPitPhase.Armed or AiPursuitPitPhase.Attempting })
+            {
+                var pitFallback = UpdateUnavailablePit(previous);
+                Interlocked.Exchange(ref _pursuit, previous with
+                {
+                    PitState = pitFallback?.State,
+                    PitDiagnostics = pitFallback?.Diagnostics
+                });
+                return new AiPursuitTrackingResult(
+                    AiPursuitTrackingStatus.RouteTemporarilyUnavailable,
+                    null, 0, PitDiagnostics: pitFallback?.Diagnostics);
             }
 
             return new AiPursuitTrackingResult(
@@ -208,11 +231,15 @@ public class AiState
                 spatialDistanceSquared,
                 options.MaximumSpatialDistanceMeters))
         {
+            var pitEvent = previous?.PitDiagnostics?.EventKind == AiPursuitPitEventKind.Contact
+                ? previous.PitDiagnostics
+                : null;
             ReleasePursuit();
             return new AiPursuitTrackingResult(
                 AiPursuitTrackingStatus.MaxDistanceExceeded,
                 null,
-                targetSpeed);
+                targetSpeed,
+                PitDiagnostics: pitEvent);
         }
 
         var previousNavigation = previous?.TargetSessionId == target.SessionId
@@ -294,13 +321,16 @@ public class AiState
 
         if (navigation.Status == AiPursuitNavigationStatus.NoRoute)
         {
+            var pitFallback = previous == null ? null : UpdateUnavailablePit(previous);
             ReleasePursuit();
             return new AiPursuitTrackingResult(
                 AiPursuitTrackingStatus.NoRoute,
                 null,
                 targetSpeed,
                 SearchDiagnostics: searchDiagnostics,
-                LaneChangeDiagnostics: laneChangeDiagnostics);
+                LaneChangeDiagnostics: laneChangeDiagnostics,
+                PitDiagnostics: AiPursuitControl.SelectPitDiagnosticsForDelivery(
+                    previous?.PitDiagnostics, pitFallback?.Diagnostics));
         }
 
         var sameTarget = previous?.TargetSessionId == target.SessionId;
@@ -342,6 +372,18 @@ public class AiState
             drivingState = null;
             drivingDiagnostics = null;
         }
+        AiPursuitPitDecision? pitDecision = null;
+        if (options.Driving is { Enabled: true, Pit: { Enabled: true } pitOptions }
+            && drivingState != null && drivingDiagnostics != null)
+        {
+            pitDecision = CreatePitDecision(
+                target, targetPosition, targetVelocity, navigation, navigationState,
+                drivingDiagnostics, pitOptions, previous?.PitState);
+        }
+        else if (previous?.PitState is { Phase: AiPursuitPitPhase.Armed or AiPursuitPitPhase.Attempting })
+        {
+            pitDecision = UpdateUnavailablePit(previous);
+        }
         var snapshot = new AiPursuitSnapshot(
             target.SessionId,
             targetPosition,
@@ -349,12 +391,17 @@ public class AiState
             navigationState,
             desiredSpeed,
             drivingState,
-            drivingDiagnostics);
+            drivingDiagnostics,
+            pitDecision?.State,
+            pitDecision?.Diagnostics);
         Interlocked.Exchange(ref _pursuit, snapshot);
         _junctionEvaluator.SetExplicitDecisions(navigationState.Plan.JunctionDecisions);
         var deliveredDrivingDiagnostics = AiPursuitControl.SelectDrivingDiagnosticsForDelivery(
             sameTarget ? previous?.DrivingDiagnostics : null,
             drivingDiagnostics);
+        var deliveredPitDiagnostics = AiPursuitControl.SelectPitDiagnosticsForDelivery(
+            sameTarget ? previous?.PitDiagnostics : null,
+            pitDecision?.Diagnostics);
 
         if (navigation.Status == AiPursuitNavigationStatus.RouteTemporarilyUnavailable)
         {
@@ -364,7 +411,8 @@ public class AiState
                 targetSpeed,
                 SearchDiagnostics: searchDiagnostics,
                 LaneChangeDiagnostics: laneChangeDiagnostics,
-                DrivingDiagnostics: deliveredDrivingDiagnostics);
+                DrivingDiagnostics: deliveredDrivingDiagnostics,
+                PitDiagnostics: deliveredPitDiagnostics);
         }
 
         var diagnostics = AiPursuitControl.CreateRouteDiagnostics(
@@ -379,7 +427,88 @@ public class AiState
             diagnostics,
             searchDiagnostics,
             laneChangeDiagnostics,
-            deliveredDrivingDiagnostics);
+            deliveredDrivingDiagnostics,
+            deliveredPitDiagnostics);
+    }
+
+    private AiPursuitPitDecision? UpdateUnavailablePit(AiPursuitSnapshot previous)
+    {
+        if (previous.PitState == null || previous.Options.Driving?.Pit is not { } pit)
+            return null;
+        return _pursuitPitController.Update(new AiPursuitPitRequest(
+            pit, previous.TargetSessionId, false, false, false,
+            0, 0, AiPursuitDrivingState.Recovery,
+            AiPursuitDrivingReason.InvalidMeasurement,
+            _laneChangeController?.Phase ?? AiLaneChangePhase.None,
+            false, false, false, previous.NavigationState.Revision,
+            _sessionManager.ServerTimeMilliseconds, previous.PitState));
+    }
+
+    private AiPursuitPitDecision CreatePitDecision(
+        EntryCar target,
+        Vector3 targetPosition,
+        Vector3 targetVelocity,
+        AiPursuitNavigationResult navigation,
+        AiPursuitRouteState route,
+        AiPursuitDrivingDiagnostics driving,
+        AiPursuitPitOptions pit,
+        AiPursuitPitControllerState? previous)
+    {
+        var pose = EvaluateSplinePose(CurrentSplinePointId, _currentVecProgress);
+        var laneWidth = _configuration.Extra.AiParams.LaneWidthMeters;
+        var fitsLane = float.IsFinite(laneWidth)
+                       && pit.LateralOffsetMeters <= laneWidth / 2 - .4f;
+        var routeValid = navigation.Status == AiPursuitNavigationStatus.Active
+                         && fitsLane
+                         && AiPursuitPitGeometry.CanStartOrContinue(
+                             previous?.Phase, Volatile.Read(ref _pitOffsetMeters));
+        var aligned = AiPursuitPitGeometry.IsTargetAligned(
+            pose.Position, pose.Tangent, targetPosition, targetVelocity, laneWidth);
+        var junctionNear = route.Plan.Nodes.Any(node =>
+            AiPursuitPitGeometry.IsJunctionWithinDistance(
+                node.DistanceFromStartMeters, _currentVecProgress, 25)
+            && (_spline.Points[node.PointId].JunctionStartId >= 0
+                || _spline.Points[node.PointId].JunctionEndId >= 0));
+        var sideSafety = routeValid && aligned
+            ? GetPitSideSafety(pose, target.SessionId, pit.LateralOffsetMeters, laneWidth)
+            : (false, false);
+        return _pursuitPitController.Update(new AiPursuitPitRequest(
+            pit, target.SessionId, routeValid, aligned, aligned,
+            driving.PhysicalClearanceMeters, driving.ClosingSpeedMetersPerSecond,
+            driving.State, driving.Reason,
+            _laneChangeController?.Phase ?? AiLaneChangePhase.None,
+            junctionNear, sideSafety.Item1, sideSafety.Item2,
+            route.Revision, _sessionManager.ServerTimeMilliseconds, previous));
+    }
+
+    private (bool Left, bool Right) GetPitSideSafety(
+        AiSplinePose pose, byte targetSessionId, float offsetMeters, float laneWidth)
+    {
+        var obstacles = new List<AiPursuitPitObstacle>();
+        foreach (var car in _entryCarManager.EntryCars)
+        {
+            if (car.AiControlled)
+            {
+                var states = new List<AiState>();
+                car.GetInitializedStates(states);
+                foreach (var state in states)
+                    if (!ReferenceEquals(state, this))
+                        obstacles.Add(new AiPursuitPitObstacle(
+                            car.SessionId, state.Status.Position, state.Status.Velocity,
+                            state.EntryCar.VehicleLengthPreMeters
+                            + state.EntryCar.VehicleLengthPostMeters));
+            }
+            else if (car.Client?.HasSentFirstUpdate == true)
+            {
+                obstacles.Add(new AiPursuitPitObstacle(
+                    car.SessionId, car.Status.Position, car.Status.Velocity,
+                    car.VehicleLengthPreMeters + car.VehicleLengthPostMeters));
+            }
+        }
+        return AiPursuitPitGeometry.EvaluateSideSafety(
+            pose.Position, pose.Tangent, CurrentSpeed,
+            EntryCar.VehicleLengthPreMeters + EntryCar.VehicleLengthPostMeters,
+            laneWidth, offsetMeters, targetSessionId, obstacles);
     }
 
     private bool TryRetainCommittedLaneChange(
@@ -534,10 +663,19 @@ public class AiState
                 Reason = collisionState.Reason,
                 CollisionReported = true
             };
+            AiPursuitPitDecision? pitCollision = null;
+            if (current.PitState is { Phase: AiPursuitPitPhase.Attempting } pitState)
+                pitCollision = _pursuitPitController.ReportCollision(
+                    pitState, _sessionManager.ServerTimeMilliseconds);
+            var pitCollisionDiagnostics = pitCollision?.Diagnostics is { } reportedPit
+                ? reportedPit with { OffsetMeters = Volatile.Read(ref _pitOffsetMeters) }
+                : null;
             var updated = current with
             {
                 DrivingState = collisionState,
-                DrivingDiagnostics = collisionDiagnostics
+                DrivingDiagnostics = collisionDiagnostics,
+                PitState = pitCollision?.State ?? current.PitState,
+                PitDiagnostics = pitCollisionDiagnostics
             };
             if (ReferenceEquals(
                     Interlocked.CompareExchange(ref _pursuit, updated, current),
@@ -607,6 +745,15 @@ public class AiState
             return AiLaneChangeSafetyStatus.Safe;
         }
 
+        if (_laneChangeController.Phase == AiLaneChangePhase.WaitingForGap
+            && MathF.Abs(Volatile.Read(ref _pitOffsetMeters)) > .02f)
+        {
+            _laneChangeController.UpdateWaiting(
+                AiLaneChangeSafetyStatus.BlockedSide,
+                _sessionManager.ServerTimeMilliseconds);
+            return AiLaneChangeSafetyStatus.BlockedSide;
+        }
+
         var obstacles = new List<AiLaneChangeObstacle>();
         foreach (var car in _entryCarManager.EntryCars)
         {
@@ -670,6 +817,9 @@ public class AiState
 
     public void Teleport(int pointId)
     {
+        ReleasePursuit();
+        Volatile.Write(ref _pitOffsetMeters, 0);
+        _lastPitForward = Vector3.Zero;
         _junctionEvaluator.Clear();
         CurrentSplinePointId = pointId;
         if (!_junctionEvaluator.TryNext(CurrentSplinePointId, out var nextPointId))
@@ -1213,6 +1363,34 @@ public class AiState
                 _currentVecProgress / _currentVecLength);
             position = smoothPos.Position;
             tangent = smoothPos.Tangent;
+        }
+
+        var pursuit = Volatile.Read(ref _pursuit);
+        var desiredPitOffset = pursuit?.PitState is { Phase: AiPursuitPitPhase.Attempting, Side: { } side }
+                               && pursuit.Options.Driving?.Pit is { Enabled: true } pit
+            ? (side == AiPursuitPitSide.Left ? 1 : -1) * pit.LateralOffsetMeters
+            : 0;
+        var priorPitOffset = _pitOffsetMeters;
+        var pitStepSeconds = Math.Clamp(dt / 1000f, 0, .05f);
+        var pitRate = pursuit?.Options.Driving?.Pit is { Enabled: true } activePit
+            ? activePit.LateralOffsetMeters / Math.Max(.2f, activePit.CommitMilliseconds / 2000f)
+            : 1.5f;
+        var nextPitOffset = AiPursuitPitController.ApproachOffset(
+            priorPitOffset, desiredPitOffset, pitRate * pitStepSeconds);
+        Volatile.Write(ref _pitOffsetMeters, nextPitOffset);
+        if (nextPitOffset != 0 || priorPitOffset != 0)
+        {
+            var flatTangent = new Vector3(tangent.X, 0, tangent.Z);
+            if (float.IsFinite(flatTangent.X) && float.IsFinite(flatTangent.Z)
+                && flatTangent.LengthSquared() > .000001f)
+                _lastPitForward = tangent;
+            else if (_lastPitForward.LengthSquared() > .000001f)
+                tangent = _lastPitForward;
+            var adjusted = AiPursuitPitGeometry.ApplyOffset(
+                position, tangent, priorPitOffset, nextPitOffset,
+                Math.Max(0, dt / 1000f), CurrentSpeed);
+            position = adjusted.Position;
+            tangent = adjusted.Forward;
         }
             
         Vector3 rotation = new Vector3
