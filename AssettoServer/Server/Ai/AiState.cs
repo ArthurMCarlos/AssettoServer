@@ -373,12 +373,13 @@ public class AiState
             drivingDiagnostics = null;
         }
         AiPursuitPitDecision? pitDecision = null;
+        AiPursuitPitEligibilityDiagnostics? pitEligibility = null;
         if (options.Driving is { Enabled: true, Pit: { Enabled: true } pitOptions }
             && drivingState != null && drivingDiagnostics != null)
         {
             pitDecision = CreatePitDecision(
                 target, targetPosition, targetVelocity, navigation, navigationState,
-                drivingDiagnostics, pitOptions, previous?.PitState);
+                drivingDiagnostics, pitOptions, previous?.PitState, out pitEligibility);
         }
         else if (previous?.PitState is { Phase: AiPursuitPitPhase.Armed or AiPursuitPitPhase.Attempting })
         {
@@ -412,7 +413,8 @@ public class AiState
                 SearchDiagnostics: searchDiagnostics,
                 LaneChangeDiagnostics: laneChangeDiagnostics,
                 DrivingDiagnostics: deliveredDrivingDiagnostics,
-                PitDiagnostics: deliveredPitDiagnostics);
+                PitDiagnostics: deliveredPitDiagnostics,
+                PitEligibilityDiagnostics: pitEligibility);
         }
 
         var diagnostics = AiPursuitControl.CreateRouteDiagnostics(
@@ -428,7 +430,8 @@ public class AiState
             searchDiagnostics,
             laneChangeDiagnostics,
             deliveredDrivingDiagnostics,
-            deliveredPitDiagnostics);
+            deliveredPitDiagnostics,
+            pitEligibility);
     }
 
     private AiPursuitPitDecision? UpdateUnavailablePit(AiPursuitSnapshot previous)
@@ -452,16 +455,18 @@ public class AiState
         AiPursuitRouteState route,
         AiPursuitDrivingDiagnostics driving,
         AiPursuitPitOptions pit,
-        AiPursuitPitControllerState? previous)
+        AiPursuitPitControllerState? previous,
+        out AiPursuitPitEligibilityDiagnostics eligibility)
     {
         var pose = EvaluateSplinePose(CurrentSplinePointId, _currentVecProgress);
         var laneWidth = _configuration.Extra.AiParams.LaneWidthMeters;
         var fitsLane = float.IsFinite(laneWidth)
                        && pit.LateralOffsetMeters <= laneWidth / 2 - .4f;
+        var currentOffset = Volatile.Read(ref _pitOffsetMeters);
+        var offsetReady = AiPursuitPitGeometry.CanStartOrContinue(
+            previous?.Phase, currentOffset);
         var routeValid = navigation.Status == AiPursuitNavigationStatus.Active
-                         && fitsLane
-                         && AiPursuitPitGeometry.CanStartOrContinue(
-                             previous?.Phase, Volatile.Read(ref _pitOffsetMeters));
+                         && fitsLane && offsetReady;
         var aligned = AiPursuitPitGeometry.IsTargetAligned(
             pose.Position, pose.Tangent, targetPosition, targetVelocity, laneWidth);
         var junctionNear = route.Plan.Nodes.Any(node =>
@@ -472,13 +477,28 @@ public class AiState
         var sideSafety = routeValid && aligned
             ? GetPitSideSafety(pose, target.SessionId, pit.LateralOffsetMeters, laneWidth)
             : (false, false);
-        return _pursuitPitController.Update(new AiPursuitPitRequest(
+        var lanePhase = _laneChangeController?.Phase ?? AiLaneChangePhase.None;
+        var decision = _pursuitPitController.Update(new AiPursuitPitRequest(
             pit, target.SessionId, routeValid, aligned, aligned,
             driving.PhysicalClearanceMeters, driving.ClosingSpeedMetersPerSecond,
-            driving.State, driving.Reason,
-            _laneChangeController?.Phase ?? AiLaneChangePhase.None,
+            driving.State, driving.Reason, lanePhase,
             junctionNear, sideSafety.Item1, sideSafety.Item2,
             route.Revision, _sessionManager.ServerTimeMilliseconds, previous));
+        var alignment = AiPursuitPitGeometry.MeasureAlignment(
+            pose.Position, pose.Tangent, targetPosition, targetVelocity);
+        eligibility = new AiPursuitPitEligibilityDiagnostics(
+            decision.State.Phase, decision.EligibilityRejection,
+            navigation.Status == AiPursuitNavigationStatus.Active,
+            fitsLane, offsetReady, aligned, laneWidth, currentOffset,
+            alignment.LongitudinalMeters, alignment.LateralMeters, alignment.HeadingDot,
+            junctionNear, sideSafety.Item1, sideSafety.Item2,
+            driving.PhysicalClearanceMeters, driving.ClosingSpeedMetersPerSecond,
+            driving.State, driving.Reason)
+        {
+            RouteRevision = route.Revision,
+            LaneChangePhase = lanePhase
+        };
+        return decision;
     }
 
     private (bool Left, bool Right) GetPitSideSafety(

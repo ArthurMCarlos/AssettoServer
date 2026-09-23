@@ -87,6 +87,21 @@ public class AiPursuitPitControllerTests
     }
 
     [Test]
+    public void IdleRejectionRetainsTheControllerReasonWithoutEmittingPitEvent()
+    {
+        var result = new AiPursuitPitController().Update(Request(
+            clearance: 4, closing: 1, sameLane: false));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.State.Phase, Is.EqualTo(AiPursuitPitPhase.Idle));
+            Assert.That(result.Diagnostics, Is.Null);
+            Assert.That(result.EligibilityRejection,
+                Is.EqualTo(AiPursuitPitAbortReason.GeometryInvalid));
+        });
+    }
+
+    [Test]
     public void RouteLossAndTargetSwitchAbortAndCooldown()
     {
         var controller = new AiPursuitPitController();

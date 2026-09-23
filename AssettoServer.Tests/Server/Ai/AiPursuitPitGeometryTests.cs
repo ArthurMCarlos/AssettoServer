@@ -28,6 +28,20 @@ public class AiPursuitPitGeometryTests
     }
 
     [Test]
+    public void AlignmentMeasurementsExposeBehindAndLateralOffsetWithoutChangingDecision()
+    {
+        var measurements = AiPursuitPitGeometry.MeasureAlignment(
+            Vector3.Zero, Vector3.UnitZ, new Vector3(2, 0, -6),
+            new Vector3(0, 0, 10));
+        Assert.Multiple(() =>
+        {
+            Assert.That(measurements.LongitudinalMeters, Is.EqualTo(-6));
+            Assert.That(measurements.LateralMeters, Is.EqualTo(2));
+            Assert.That(measurements.HeadingDot, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void OverlayMovesLaterallyWithoutChangingSplineAnchorAndAddsLateralHeading()
     {
         var pose = AiPursuitPitGeometry.ApplyOffset(Vector3.Zero, Vector3.UnitZ,

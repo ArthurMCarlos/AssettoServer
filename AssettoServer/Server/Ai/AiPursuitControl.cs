@@ -95,6 +95,31 @@ public sealed record AiPursuitPitDiagnostics(
     float ClosingSpeedMetersPerSecond,
     float OffsetMeters);
 
+// Temporary, observational PIT gate diagnostics. Never feeds the PIT controller.
+public sealed record AiPursuitPitEligibilityDiagnostics(
+    AiPursuitPitPhase Phase,
+    AiPursuitPitAbortReason? RejectionReason,
+    bool NavigationActive,
+    bool LaneFitsOffset,
+    bool OffsetReady,
+    bool TargetAligned,
+    float LaneWidthMeters,
+    float CurrentOffsetMeters,
+    float TargetLongitudinalMeters,
+    float TargetLateralMeters,
+    float HeadingDot,
+    bool JunctionNear,
+    bool LeftSafe,
+    bool RightSafe,
+    float PhysicalClearanceMeters,
+    float ClosingSpeedMetersPerSecond,
+    AiPursuitDrivingState DrivingState,
+    AiPursuitDrivingReason DrivingReason)
+{
+    public long RouteRevision { get; init; }
+    public AiLaneChangePhase LaneChangePhase { get; init; }
+}
+
 public sealed record AiPursuitDrivingDiagnostics(
     long Revision,
     AiPursuitDrivingState State,
@@ -142,7 +167,8 @@ public sealed record AiPursuitTrackingResult(
     AiPursuitSearchDiagnostics? SearchDiagnostics = null,
     AiPursuitLaneChangeDiagnostics? LaneChangeDiagnostics = null,
     AiPursuitDrivingDiagnostics? DrivingDiagnostics = null,
-    AiPursuitPitDiagnostics? PitDiagnostics = null);
+    AiPursuitPitDiagnostics? PitDiagnostics = null,
+    AiPursuitPitEligibilityDiagnostics? PitEligibilityDiagnostics = null);
 
 public sealed record AiPursuitLaneChangeDiagnostics(
     long Revision,

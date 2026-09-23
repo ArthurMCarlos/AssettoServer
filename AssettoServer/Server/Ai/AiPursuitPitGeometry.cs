@@ -7,9 +7,28 @@ namespace AssettoServer.Server.Ai;
 public readonly record struct AiPursuitPitPose(Vector3 Position, Vector3 Forward);
 public readonly record struct AiPursuitPitObstacle(
     byte SessionId, Vector3 Position, Vector3 Velocity, float LengthMeters);
+public readonly record struct AiPursuitPitAlignmentMeasurements(
+    float LongitudinalMeters, float LateralMeters, float HeadingDot);
 
 public static class AiPursuitPitGeometry
 {
+    public static AiPursuitPitAlignmentMeasurements MeasureAlignment(
+        Vector3 policePosition, Vector3 splineForward,
+        Vector3 targetPosition, Vector3 targetVelocity)
+    {
+        if (!IsFinite(policePosition) || !IsFinite(splineForward)
+            || !IsFinite(targetPosition) || !IsFinite(targetVelocity))
+            return new(float.NaN, float.NaN, float.NaN);
+        var forward = Vector3.Normalize(new Vector3(splineForward.X, 0, splineForward.Z));
+        var velocity = Vector3.Normalize(new Vector3(targetVelocity.X, 0, targetVelocity.Z));
+        if (!IsFinite(forward) || !IsFinite(velocity))
+            return new(float.NaN, float.NaN, float.NaN);
+        var relative = targetPosition - policePosition;
+        return new(Vector3.Dot(relative, forward),
+            MathF.Abs(Vector3.Dot(relative, Vector3.Cross(forward, Vector3.UnitY))),
+            Vector3.Dot(forward, velocity));
+    }
+
     public static bool CanStartOrContinue(
         AiPursuitPitPhase? previousPhase,
         float currentOffsetMeters) =>

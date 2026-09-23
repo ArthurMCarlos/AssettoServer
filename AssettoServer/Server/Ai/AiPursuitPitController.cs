@@ -40,7 +40,10 @@ public sealed record AiPursuitPitRequest(
 public sealed record AiPursuitPitDecision(
     AiPursuitPitControllerState State,
     float DesiredOffsetMeters,
-    AiPursuitPitDiagnostics? Diagnostics);
+    AiPursuitPitDiagnostics? Diagnostics)
+{
+    public AiPursuitPitAbortReason? EligibilityRejection { get; init; }
+}
 
 public sealed class AiPursuitPitController
 {
@@ -73,7 +76,7 @@ public sealed class AiPursuitPitController
                 Side = null,
                 TargetSessionId = request.TargetSessionId,
                 RouteRevision = request.RouteRevision
-            }, 0, null);
+            }, 0, null) { EligibilityRejection = invalid };
         }
 
         if (previous.Phase == AiPursuitPitPhase.Attempting)
