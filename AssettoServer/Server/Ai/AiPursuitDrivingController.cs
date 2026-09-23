@@ -31,7 +31,6 @@ public sealed class AiPursuitDrivingController
 {
     private const float HysteresisFactor = 0.1f;
     private const float ClosingSpeedDeadbandMetersPerSecond = 0.5f;
-    private const float LaneChangeClosingSpeedFactor = 0.5f;
 
     public AiPursuitDrivingDecision Update(AiPursuitDrivingRequest request)
     {
@@ -56,21 +55,12 @@ public sealed class AiPursuitDrivingController
             request.PhysicalClearanceMeters,
             options);
 
-        if (request.LaneChangePhase == AiLaneChangePhase.Changing)
-            desiredClosingSpeed *= LaneChangeClosingSpeedFactor;
-
         var reason = GetReason(state, options.ContactEnabled);
         if (state != AiPursuitDrivingState.Recovery
             && closingSpeed > desiredClosingSpeed + ClosingSpeedDeadbandMetersPerSecond)
         {
             reason = AiPursuitDrivingReason.ExcessClosingSpeed;
         }
-        else if (state != AiPursuitDrivingState.Recovery
-                 && request.LaneChangePhase == AiLaneChangePhase.Changing)
-        {
-            reason = AiPursuitDrivingReason.LaneChangeLimited;
-        }
-
         var requestedSpeed = request.TargetSpeedMetersPerSecond + desiredClosingSpeed;
         if (previous != null
             && MathF.Abs(closingSpeed - desiredClosingSpeed)
@@ -184,17 +174,17 @@ public sealed class AiPursuitDrivingController
             options.MaximumClosingSpeedMetersPerSecond,
             Math.Max(
                 options.ContactClosingSpeedMetersPerSecond,
-                options.MaximumClosingSpeedMetersPerSecond * 0.25f));
+                options.MaximumClosingSpeedMetersPerSecond * 0.5f));
         return state switch
         {
             AiPursuitDrivingState.CatchUp => options.MaximumClosingSpeedMetersPerSecond,
             AiPursuitDrivingState.Approach => Lerp(
                 closePressureSpeed,
                 options.MaximumClosingSpeedMetersPerSecond,
-                Normalize(
+                MathF.Sqrt(Normalize(
                     routeDistance,
                     options.CloseDistanceMeters,
-                    options.CatchUpDistanceMeters)),
+                    options.CatchUpDistanceMeters))),
             AiPursuitDrivingState.ClosePressure => Lerp(
                 options.ContactEnabled
                     ? options.ContactClosingSpeedMetersPerSecond

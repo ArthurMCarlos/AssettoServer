@@ -221,7 +221,7 @@ public class AiPursuitDrivingControllerTests
     }
 
     [Test]
-    public void ChangingLaneReducesClosingEnvelopeWithoutStopping()
+    public void ChangingLaneKeepsClosingEnvelopeWithoutArtificialPenalty()
     {
         var normal = CreateController().Update(Request(150, 140));
         var changing = CreateController().Update(Request(
@@ -232,9 +232,56 @@ public class AiPursuitDrivingControllerTests
         Assert.Multiple(() =>
         {
             Assert.That(changing.Diagnostics.DesiredClosingSpeedMetersPerSecond,
-                Is.EqualTo(normal.Diagnostics.DesiredClosingSpeedMetersPerSecond * 0.5f).Within(0.001));
+                Is.EqualTo(normal.Diagnostics.DesiredClosingSpeedMetersPerSecond).Within(0.001));
             Assert.That(changing.Diagnostics.DesiredClosingSpeedMetersPerSecond, Is.GreaterThan(0));
-            Assert.That(changing.Diagnostics.Reason, Is.EqualTo(AiPursuitDrivingReason.LaneChangeLimited));
+            Assert.That(changing.Diagnostics.Reason, Is.EqualTo(normal.Diagnostics.Reason));
+        });
+    }
+
+    [TestCase(150)]
+    [TestCase(300)]
+    public void DistantCatchUpImmediatelyUsesConfiguredClosingCap(float distance)
+    {
+        var decision = CreateController().Update(Request(
+            distance, distance - 10, targetSpeed: 40, policeSpeed: 25));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.Diagnostics.State, Is.EqualTo(AiPursuitDrivingState.CatchUp));
+            Assert.That(decision.Diagnostics.DesiredClosingSpeedMetersPerSecond,
+                Is.EqualTo(35 / 3.6f).Within(0.001));
+            Assert.That(decision.RequestedSpeedMetersPerSecond, Is.LessThanOrEqualTo(50));
+        });
+    }
+
+    [Test]
+    public void SeventyMeterApproachFrontLoadsClosingIntent()
+    {
+        var decision = CreateController().Update(Request(70, 65));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.Diagnostics.State, Is.EqualTo(AiPursuitDrivingState.Approach));
+            Assert.That(decision.Diagnostics.DesiredClosingSpeedMetersPerSecond, Is.GreaterThan(8.5f));
+            Assert.That(decision.Diagnostics.DesiredClosingSpeedMetersPerSecond,
+                Is.LessThanOrEqualTo(35 / 3.6f));
+        });
+    }
+
+    [Test]
+    public void TenMeterRearPressureStillConvergesToExistingContactSpeed()
+    {
+        var controller = CreateController();
+        var close = controller.Update(Request(10, 10));
+        var contact = controller.Update(Request(2.8f, 2.8f, previous: close.State));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(close.Diagnostics.State, Is.EqualTo(AiPursuitDrivingState.ClosePressure));
+            Assert.That(close.Diagnostics.DesiredClosingSpeedMetersPerSecond, Is.GreaterThan(3));
+            Assert.That(contact.Diagnostics.State, Is.EqualTo(AiPursuitDrivingState.Contact));
+            Assert.That(contact.Diagnostics.DesiredClosingSpeedMetersPerSecond,
+                Is.EqualTo(5 / 3.6f).Within(0.001));
         });
     }
 
