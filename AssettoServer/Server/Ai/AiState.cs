@@ -476,13 +476,13 @@ public class AiState
                 || _spline.Points[node.PointId].JunctionEndId >= 0));
         var sideSafety = routeValid && aligned
             ? GetPitSideSafety(pose, target.SessionId, pit.LateralOffsetMeters, laneWidth)
-            : (false, false);
+            : null;
         var lanePhase = _laneChangeController?.Phase ?? AiLaneChangePhase.None;
         var decision = _pursuitPitController.Update(new AiPursuitPitRequest(
             pit, target.SessionId, routeValid, aligned, aligned,
             driving.PhysicalClearanceMeters, driving.ClosingSpeedMetersPerSecond,
             driving.State, driving.Reason, lanePhase,
-            junctionNear, sideSafety.Item1, sideSafety.Item2,
+            junctionNear, sideSafety?.Left ?? false, sideSafety?.Right ?? false,
             route.Revision, _sessionManager.ServerTimeMilliseconds, previous));
         var alignment = AiPursuitPitGeometry.MeasureAlignment(
             pose.Position, pose.Tangent, targetPosition, targetVelocity);
@@ -491,17 +491,18 @@ public class AiState
             navigation.Status == AiPursuitNavigationStatus.Active,
             fitsLane, offsetReady, aligned, laneWidth, currentOffset,
             alignment.LongitudinalMeters, alignment.LateralMeters, alignment.HeadingDot,
-            junctionNear, sideSafety.Item1, sideSafety.Item2,
+            junctionNear, sideSafety?.Left ?? false, sideSafety?.Right ?? false,
             driving.PhysicalClearanceMeters, driving.ClosingSpeedMetersPerSecond,
             driving.State, driving.Reason)
         {
             RouteRevision = route.Revision,
-            LaneChangePhase = lanePhase
+            LaneChangePhase = lanePhase,
+            SideSafety = sideSafety
         };
         return decision;
     }
 
-    private (bool Left, bool Right) GetPitSideSafety(
+    private AiPursuitPitSideSafetyResult GetPitSideSafety(
         AiSplinePose pose, byte targetSessionId, float offsetMeters, float laneWidth)
     {
         var obstacles = new List<AiPursuitPitObstacle>();
@@ -516,16 +517,18 @@ public class AiState
                         obstacles.Add(new AiPursuitPitObstacle(
                             car.SessionId, state.Status.Position, state.Status.Velocity,
                             state.EntryCar.VehicleLengthPreMeters
-                            + state.EntryCar.VehicleLengthPostMeters));
+                            + state.EntryCar.VehicleLengthPostMeters,
+                            "AI", car.Model, state.SpawnCounter));
             }
             else if (car.Client?.HasSentFirstUpdate == true)
             {
                 obstacles.Add(new AiPursuitPitObstacle(
                     car.SessionId, car.Status.Position, car.Status.Velocity,
-                    car.VehicleLengthPreMeters + car.VehicleLengthPostMeters));
+                    car.VehicleLengthPreMeters + car.VehicleLengthPostMeters,
+                    "Player", car.Model));
             }
         }
-        return AiPursuitPitGeometry.EvaluateSideSafety(
+        return AiPursuitPitGeometry.EvaluateSideSafetyDetailed(
             pose.Position, pose.Tangent, CurrentSpeed,
             EntryCar.VehicleLengthPreMeters + EntryCar.VehicleLengthPostMeters,
             laneWidth, offsetMeters, targetSessionId, obstacles);

@@ -118,6 +118,7 @@ public sealed record AiPursuitPitEligibilityDiagnostics(
 {
     public long RouteRevision { get; init; }
     public AiLaneChangePhase LaneChangePhase { get; init; }
+    public AiPursuitPitSideSafetyResult? SideSafety { get; init; }
 }
 
 public sealed record AiPursuitDrivingDiagnostics(

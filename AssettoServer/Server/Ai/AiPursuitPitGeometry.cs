@@ -6,7 +6,12 @@ namespace AssettoServer.Server.Ai;
 
 public readonly record struct AiPursuitPitPose(Vector3 Position, Vector3 Forward);
 public readonly record struct AiPursuitPitObstacle(
-    byte SessionId, Vector3 Position, Vector3 Velocity, float LengthMeters);
+    byte SessionId, Vector3 Position, Vector3 Velocity, float LengthMeters,
+    string Kind = "Unknown", string? Model = null, byte? SpawnCounter = null);
+public sealed record AiPursuitPitSideSafetyResult(
+    bool Left, bool Right, string LeftReason, string RightReason,
+    AiPursuitPitObstacle? LeftBlocker, AiPursuitPitObstacle? RightBlocker,
+    float PoliceLengthMeters, Vector3 PolicePosition);
 public readonly record struct AiPursuitPitAlignmentMeasurements(
     float LongitudinalMeters, float LateralMeters, float HeadingDot);
 
@@ -59,34 +64,63 @@ public static class AiPursuitPitGeometry
         byte targetSessionId,
         IReadOnlyList<AiPursuitPitObstacle> vehicles)
     {
+        var result = EvaluateSideSafetyDetailed(policePosition, splineForward,
+            policeSpeed, policeLength, laneWidth, offset, targetSessionId, vehicles);
+        return (result.Left, result.Right);
+    }
+
+    public static AiPursuitPitSideSafetyResult EvaluateSideSafetyDetailed(
+        Vector3 policePosition, Vector3 splineForward, float policeSpeed,
+        float policeLength, float laneWidth, float offset, byte targetSessionId,
+        IReadOnlyList<AiPursuitPitObstacle> vehicles)
+    {
         ArgumentNullException.ThrowIfNull(vehicles);
+        AiPursuitPitSideSafetyResult Invalid(string reason, AiPursuitPitObstacle? blocker = null) =>
+            new(false, false, reason, reason, blocker, blocker, policeLength, policePosition);
         if (!IsFinite(policePosition) || !IsFinite(splineForward)
             || !float.IsFinite(policeSpeed) || policeSpeed < 0
-            || !float.IsFinite(policeLength) || policeLength <= 0
             || !float.IsFinite(laneWidth) || laneWidth <= 0
             || !float.IsFinite(offset) || offset <= 0)
-            return (false, false);
+            return Invalid("InvalidPoliceGeometry");
+        // EntryCar defaults to zero when no model dimension override is supplied.
+        // Preserve the native safety evaluator's nonnegative-length contract and
+        // its existing gap/closing margins; do not invent vehicle dimensions.
+        if (!float.IsFinite(policeLength) || policeLength < 0)
+            return Invalid("InvalidPoliceLength");
         var forward = Vector3.Normalize(new Vector3(splineForward.X, 0, splineForward.Z));
         if (!IsFinite(forward))
-            return (false, false);
+            return Invalid("InvalidPoliceDirection");
         var left = Vector3.Cross(Vector3.UnitY, forward);
-        var obstacles = new List<AiLaneChangeObstacle>();
         foreach (var vehicle in vehicles)
         {
             if (vehicle.SessionId == targetSessionId)
                 continue;
-            if (!IsFinite(vehicle.Position) || !IsFinite(vehicle.Velocity)
-                || !float.IsFinite(vehicle.LengthMeters) || vehicle.LengthMeters <= 0)
-                return (false, false);
-            obstacles.Add(new AiLaneChangeObstacle(
-                vehicle.Position, vehicle.Velocity, vehicle.LengthMeters));
+            if (!IsFinite(vehicle.Position) || !IsFinite(vehicle.Velocity))
+                return Invalid("InvalidObstacleGeometry", vehicle);
+            if (!float.IsFinite(vehicle.LengthMeters) || vehicle.LengthMeters < 0)
+                return Invalid("InvalidObstacleLength", vehicle);
         }
-        bool IsSafe(float signedOffset) => AiLaneChangeSafety.Evaluate(
-            new AiLaneChangeSafetyRequest(
-                policePosition + left * signedOffset,
-                splineForward, policeSpeed, policeLength,
-                laneWidth + 2 * offset, obstacles)).Status == AiLaneChangeSafetyStatus.Safe;
-        return (IsSafe(offset), IsSafe(-offset));
+        (AiLaneChangeSafetyStatus Status, AiPursuitPitObstacle? Blocker) Evaluate(float signedOffset)
+        {
+            foreach (var vehicle in vehicles)
+            {
+                if (vehicle.SessionId == targetSessionId)
+                    continue;
+                var status = AiLaneChangeSafety.Evaluate(new AiLaneChangeSafetyRequest(
+                    policePosition + left * signedOffset, splineForward, policeSpeed,
+                    policeLength, laneWidth + 2 * offset,
+                    [new AiLaneChangeObstacle(vehicle.Position, vehicle.Velocity, vehicle.LengthMeters)])).Status;
+                if (status != AiLaneChangeSafetyStatus.Safe)
+                    return (status, vehicle);
+            }
+            return (AiLaneChangeSafetyStatus.Safe, null);
+        }
+        var leftResult = Evaluate(offset);
+        var rightResult = Evaluate(-offset);
+        return new(leftResult.Status == AiLaneChangeSafetyStatus.Safe,
+            rightResult.Status == AiLaneChangeSafetyStatus.Safe,
+            leftResult.Status.ToString(), rightResult.Status.ToString(),
+            leftResult.Blocker, rightResult.Blocker, policeLength, policePosition);
     }
 
     public static bool IsTargetAligned(
