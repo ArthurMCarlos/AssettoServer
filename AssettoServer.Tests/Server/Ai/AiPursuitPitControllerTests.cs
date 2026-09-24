@@ -159,7 +159,7 @@ public class AiPursuitPitControllerTests
     }
 
     [Test]
-    public void DisabledPitAndRouteRevisionChangeCannotContinueAnAttempt()
+    public void DisabledPitCannotContinueAnAttempt()
     {
         var controller = new AiPursuitPitController();
         var disabled = Options with { Enabled = false };
@@ -168,8 +168,8 @@ public class AiPursuitPitControllerTests
 
         var armed = controller.Update(Request());
         var attempt = controller.Update(Request(armed.State, 1100));
-        var revised = controller.Update(Request(attempt.State, 1200) with { RouteRevision = 2 });
-        Assert.That(revised.Diagnostics?.Reason, Is.EqualTo(AiPursuitPitAbortReason.RouteLost));
+        var stopped = controller.Update(Request(attempt.State, 1200, options: disabled));
+        Assert.That(stopped.Diagnostics?.Reason, Is.EqualTo(AiPursuitPitAbortReason.Disabled));
     }
 
     [Test]

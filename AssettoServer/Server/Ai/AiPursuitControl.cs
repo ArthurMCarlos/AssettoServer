@@ -93,7 +93,27 @@ public sealed record AiPursuitPitDiagnostics(
     AiPursuitPitAbortReason Reason,
     float PhysicalClearanceMeters,
     float ClosingSpeedMetersPerSecond,
-    float OffsetMeters);
+    float OffsetMeters)
+{
+    public AiPursuitPitContinuityDiagnostics? Continuity { get; init; }
+}
+
+// Observational snapshot captured at the PIT decision, never used by its gates.
+public sealed record AiPursuitPitContinuityDiagnostics(
+    long ArmedRouteRevision,
+    long? CurrentRouteRevision,
+    AiPursuitPitPhase PreviousPhase,
+    string NavigationStatus,
+    bool NavigationActive,
+    bool RouteAvailable,
+    int? PolicePoint,
+    int? TargetPoint,
+    float? RouteDistanceMeters,
+    bool? TargetAligned,
+    AiLaneChangePhase LaneChangePhase,
+    bool? JunctionNear,
+    bool? LaneFitsOffset,
+    bool? OffsetReady);
 
 // Temporary, observational PIT gate diagnostics. Never feeds the PIT controller.
 public sealed record AiPursuitPitEligibilityDiagnostics(

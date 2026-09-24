@@ -187,7 +187,7 @@ public class AiState
                         previous.NavigationState.Revision,
                         _sessionManager.ServerTimeMilliseconds,
                         previous.DrivingState));
-                var pitFallback = UpdateUnavailablePit(previous);
+                var pitFallback = UpdateUnavailablePit(previous, "InvalidMeasurement");
                 Interlocked.Exchange(ref _pursuit, previous with
                 {
                     DesiredSpeedMetersPerSecond = fallback.RequestedSpeedMetersPerSecond,
@@ -209,7 +209,7 @@ public class AiState
 
             if (previous?.PitState is { Phase: AiPursuitPitPhase.Armed or AiPursuitPitPhase.Attempting })
             {
-                var pitFallback = UpdateUnavailablePit(previous);
+                var pitFallback = UpdateUnavailablePit(previous, "InvalidMeasurement");
                 Interlocked.Exchange(ref _pursuit, previous with
                 {
                     PitState = pitFallback?.State,
@@ -321,7 +321,7 @@ public class AiState
 
         if (navigation.Status == AiPursuitNavigationStatus.NoRoute)
         {
-            var pitFallback = previous == null ? null : UpdateUnavailablePit(previous);
+            var pitFallback = previous == null ? null : UpdateUnavailablePit(previous, "NoRoute");
             ReleasePursuit();
             return new AiPursuitTrackingResult(
                 AiPursuitTrackingStatus.NoRoute,
@@ -383,7 +383,7 @@ public class AiState
         }
         else if (previous?.PitState is { Phase: AiPursuitPitPhase.Armed or AiPursuitPitPhase.Attempting })
         {
-            pitDecision = UpdateUnavailablePit(previous);
+            pitDecision = UpdateUnavailablePit(previous, "DrivingUnavailable");
         }
         var snapshot = new AiPursuitSnapshot(
             target.SessionId,
@@ -434,7 +434,7 @@ public class AiState
             pitEligibility);
     }
 
-    private AiPursuitPitDecision? UpdateUnavailablePit(AiPursuitSnapshot previous)
+    private AiPursuitPitDecision? UpdateUnavailablePit(AiPursuitSnapshot previous, string unavailableReason)
     {
         if (previous.PitState == null || previous.Options.Driving?.Pit is not { } pit)
             return null;
@@ -444,7 +444,16 @@ public class AiState
             AiPursuitDrivingReason.InvalidMeasurement,
             _laneChangeController?.Phase ?? AiLaneChangePhase.None,
             false, false, false, previous.NavigationState.Revision,
-            _sessionManager.ServerTimeMilliseconds, previous.PitState));
+            _sessionManager.ServerTimeMilliseconds, previous.PitState)
+        {
+            // The old snapshot can be retained by pursuit, but is not evidence of
+            // a current route or current geometry in this fallback path.
+            Continuity = new AiPursuitPitContinuityDiagnostics(
+                previous.PitState.RouteRevision, null, previous.PitState.Phase,
+                unavailableReason, false, false, CurrentSplinePointId, null, null,
+                null, _laneChangeController?.Phase ?? AiLaneChangePhase.None,
+                null, null, null)
+        });
     }
 
     private AiPursuitPitDecision CreatePitDecision(
@@ -483,7 +492,16 @@ public class AiState
             driving.PhysicalClearanceMeters, driving.ClosingSpeedMetersPerSecond,
             driving.State, driving.Reason, lanePhase,
             junctionNear, sideSafety?.Left ?? false, sideSafety?.Right ?? false,
-            route.Revision, _sessionManager.ServerTimeMilliseconds, previous));
+            route.Revision, _sessionManager.ServerTimeMilliseconds, previous)
+        {
+            Continuity = new AiPursuitPitContinuityDiagnostics(
+                previous is { Phase: AiPursuitPitPhase.Armed or AiPursuitPitPhase.Attempting }
+                    ? previous.RouteRevision : route.Revision,
+                route.Revision, previous?.Phase ?? AiPursuitPitPhase.Idle,
+                navigation.Status.ToString(), navigation.Status == AiPursuitNavigationStatus.Active,
+                navigation.State != null, CurrentSplinePointId, route.TargetPointId,
+                route.Plan.DistanceMeters, aligned, lanePhase, junctionNear, fitsLane, offsetReady)
+        });
         var alignment = AiPursuitPitGeometry.MeasureAlignment(
             pose.Position, pose.Tangent, targetPosition, targetVelocity);
         eligibility = new AiPursuitPitEligibilityDiagnostics(

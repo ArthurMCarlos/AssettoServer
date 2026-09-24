@@ -35,7 +35,10 @@ public sealed record AiPursuitPitRequest(
     bool RightSafe,
     long RouteRevision,
     long NowMilliseconds,
-    AiPursuitPitControllerState? Previous);
+    AiPursuitPitControllerState? Previous)
+{
+    public AiPursuitPitContinuityDiagnostics? Continuity { get; init; }
+}
 
 public sealed record AiPursuitPitDecision(
     AiPursuitPitControllerState State,
@@ -166,8 +169,9 @@ public sealed class AiPursuitPitController
         if (previous.Phase != AiPursuitPitPhase.Idle
             && previous.TargetSessionId != request.TargetSessionId)
             return AiPursuitPitAbortReason.TargetChanged;
-        if (!request.RouteValid || (previous.Phase != AiPursuitPitPhase.Idle
-                                    && previous.RouteRevision != request.RouteRevision))
+        // Replanning changes revision during normal pursuit. Revalidate the current
+        // navigation and physical safety gates, not the identity of the armed route.
+        if (!request.RouteValid)
             return AiPursuitPitAbortReason.RouteLost;
         if (request.LaneChangePhase is AiLaneChangePhase.WaitingForGap
             or AiLaneChangePhase.Changing)
@@ -220,7 +224,10 @@ public sealed class AiPursuitPitController
             request.PhysicalClearanceMeters, request.ClosingSpeedMetersPerSecond,
             kind == AiPursuitPitEventKind.Started
                 ? SignedOffset(state.Side!.Value, request.Options.LateralOffsetMeters)
-                : 0);
+                : 0)
+        {
+            Continuity = request.Continuity
+        };
 
     private static float SignedOffset(AiPursuitPitSide side, float offset) =>
         side == AiPursuitPitSide.Left ? offset : -offset;
