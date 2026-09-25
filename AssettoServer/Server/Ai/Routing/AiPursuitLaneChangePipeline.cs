@@ -38,7 +38,9 @@ internal sealed class AiPursuitLaneChangePipeline
         AiPursuitRouteState? previousNavigation,
         AiPursuitLaneChangeOptions options,
         AiRouteSearchLimits limits,
-        long nowMilliseconds)
+        long nowMilliseconds,
+        Func<AiPursuitLaneSelectionResult, AiPursuitLaneSelection?>? selectTraffic = null,
+        bool suppressAlignment = false)
     {
         ArgumentNullException.ThrowIfNull(navigation);
         ArgumentNullException.ThrowIfNull(options);
@@ -76,6 +78,14 @@ internal sealed class AiPursuitLaneChangePipeline
             options.DistanceMeters,
             options.LookaheadMeters);
         var evaluation = SelectPriority(routePreparation, alignment);
+        if (routePreparation.Kind != AiPursuitLaneSelectionKind.Change && selectTraffic != null)
+        {
+            var traffic = selectTraffic(alignment);
+            if (traffic != null)
+                evaluation = alignment with { Kind = AiPursuitLaneSelectionKind.Change, Selection = traffic };
+            else if (suppressAlignment)
+                evaluation = alignment with { Kind = AiPursuitLaneSelectionKind.Stay, Selection = null };
+        }
         if (evaluation.Kind != AiPursuitLaneSelectionKind.Change
             || evaluation.Selection == null)
         {

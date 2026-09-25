@@ -8,6 +8,58 @@ namespace AssettoServer.Tests.Server.Ai;
 public class AiPursuitLaneChangePipelineTests
 {
     [Test]
+    public void NativeGapOpeningCommitsPendingBypassEvenAfterMovementCompletes()
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        var pipeline = CreatePipeline(controller, currentReachesPhysicalTarget: true);
+        var prepared = pipeline.Evaluate(0, 0, 100, ActiveFallback(), null,
+            new(true, 60, 3000), new(20000, 50000), 100,
+            alignment => alignment.Selection! with { Motivation = AiPursuitLaneMotivation.TrafficBypass }, true);
+        var pending = new AiTrafficTacticCommit();
+        pending.Stage(new(new(AiTrafficTacticPhase.Bypass, 0, 512, 10), prepared.Evaluation.Selection), controller.Event!);
+        controller.UpdateWaiting(AiLaneChangeSafetyStatus.BlockedSide, 100);
+        Assert.That(pending.Observe(controller.Event), Is.Null);
+        // A native obstacle poll opens the gap, not a new tracking/preparation call.
+        controller.UpdateWaiting(AiLaneChangeSafetyStatus.Safe, 200);
+        Assert.That(controller.TryMove(60, 300, out var movement), Is.True);
+        Assert.That(movement.Completed, Is.True);
+        var committed = pending.Observe(controller.Event);
+        Assert.That(committed!.State.Phase, Is.EqualTo(AiTrafficTacticPhase.Bypass));
+        Assert.That(committed.State.ObstacleIdentity, Is.EqualTo(512));
+        Assert.That(pending.Observe(controller.Event), Is.Null);
+    }
+
+    [Test]
+    public void TrafficBypassUsesRealCursorsAndPreservesCommittedTransition()
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        var pipeline = CreatePipeline(controller, currentReachesPhysicalTarget: true);
+        var result = pipeline.Evaluate(0, 0, 100, ActiveFallback(), null,
+            new(true, 60, 3000), new(20000, 50000), 100,
+            alignment => alignment.Selection! with { Motivation = AiPursuitLaneMotivation.TrafficBypass }, true);
+        Assert.That(result.RequestPrepared, Is.True);
+        Assert.That(result.Evaluation.Selection!.Motivation, Is.EqualTo(AiPursuitLaneMotivation.TrafficBypass));
+        controller.UpdateWaiting(AiLaneChangeSafetyStatus.Safe, 100);
+        Assert.That(controller.TryMove(20, 200, out var movement), Is.True);
+        Assert.That(movement.Completed, Is.False);
+        bool called = false;
+        pipeline.Evaluate(0, 20, 100, ActiveFallback(), result.EffectiveNavigation.State,
+            new(true, 60, 3000), new(20000, 50000), 200, _ => { called = true; return null; }, true);
+        Assert.That(called, Is.False, "Committed physical movement must not be replaced");
+    }
+
+    [Test]
+    public void TacticalHoldSuppressesImmediateTargetAlignment()
+    {
+        var controller = new AiLaneChangeController(60, 3000);
+        var pipeline = CreatePipeline(controller, currentReachesPhysicalTarget: true);
+        var result = pipeline.Evaluate(0, 0, 100, ActiveFallback(), null,
+            new(true, 60, 3000), new(20000, 50000), 100, _ => null, true);
+        Assert.That(result.RequestPrepared, Is.False);
+        Assert.That(controller.Phase, Is.EqualTo(AiLaneChangePhase.None));
+    }
+
+    [Test]
     public void ActiveFallbackStillPreparesRequestForPhysicalAnchor()
     {
         var controller = new AiLaneChangeController(60, 3000);

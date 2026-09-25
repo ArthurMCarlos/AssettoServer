@@ -13,7 +13,8 @@ public enum AiPursuitTrackingStatus
     WaitingForSpawn,
     RouteTemporarilyUnavailable,
     MaxDistanceExceeded,
-    NoRoute
+    NoRoute,
+    Escaped
 }
 
 public sealed record AiPursuitLaneChangeOptions(
@@ -28,7 +29,10 @@ public sealed record AiPursuitTrackingOptions(
     int MaximumVisitedNodes,
     int RouteGraceMilliseconds,
     AiPursuitLaneChangeOptions? LaneChange = null,
-    AiPursuitDrivingOptions? Driving = null);
+    AiPursuitDrivingOptions? Driving = null)
+{
+    public AiPursuitCloseOptions? ClosePursuit { get; init; }
+}
 
 public enum AiPursuitDrivingState
 {
@@ -189,7 +193,10 @@ public sealed record AiPursuitTrackingResult(
     AiPursuitLaneChangeDiagnostics? LaneChangeDiagnostics = null,
     AiPursuitDrivingDiagnostics? DrivingDiagnostics = null,
     AiPursuitPitDiagnostics? PitDiagnostics = null,
-    AiPursuitPitEligibilityDiagnostics? PitEligibilityDiagnostics = null);
+    AiPursuitPitEligibilityDiagnostics? PitEligibilityDiagnostics = null)
+{
+    public AiPursuitCloseDiagnostics? CloseDiagnostics { get; init; }
+}
 
 public sealed record AiPursuitLaneChangeDiagnostics(
     long Revision,
@@ -248,7 +255,12 @@ internal sealed record AiPursuitSnapshot(
     AiPursuitDrivingControllerState? DrivingState = null,
     AiPursuitDrivingDiagnostics? DrivingDiagnostics = null,
     AiPursuitPitControllerState? PitState = null,
-    AiPursuitPitDiagnostics? PitDiagnostics = null);
+    AiPursuitPitDiagnostics? PitDiagnostics = null)
+{
+    public AiRecoveryAssistDecision? RecoveryAssist { get; init; }
+    public object? TargetConnection { get; init; }
+    public EntryCar? TargetCar { get; init; }
+}
 
 internal sealed class AiPursuitUpdateGate
 {
@@ -483,6 +495,7 @@ public static class AiPursuitControl
         }
         if (options.Driving is { Enabled: true } driving)
             ValidateDrivingOptions(driving);
+        options.ClosePursuit?.Validate(options);
     }
 
     public static void ValidateDrivingOptions(AiPursuitDrivingOptions options)

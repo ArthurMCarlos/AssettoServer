@@ -15,7 +15,9 @@ public enum AiLaneChangeDirection
 public enum AiPursuitLaneMotivation
 {
     FutureJunction,
-    TargetLaneAlignment
+    TargetLaneAlignment,
+    TrafficBypass,
+    TrafficReturn
 }
 
 public enum AiPursuitLanePhysicalRelation
@@ -117,6 +119,8 @@ public sealed class AiPursuitLaneSelector
     private readonly Func<int, int, bool> _isSameDirection;
     private readonly Func<int, IReadOnlySet<int>, AiRouteSearchLimits, AiRouteSearchResult> _tryPlan;
     private readonly Func<AiRoutePlan, AiPursuitLaneDecision?> _getDecision;
+    private readonly Func<int, int>? _getPhysicalNext;
+    private readonly Func<int, float>? _getPhysicalLength;
 
     public AiPursuitLaneSelector(AiSpline spline, AiRoutePlanner planner)
         : this(
@@ -128,7 +132,9 @@ public sealed class AiPursuitLaneSelector
             (sourcePointId, targetPointId, direction) =>
                 GetPhysicalRelation(spline, sourcePointId, targetPointId, direction),
             planner.TryPlan,
-            plan => GetDecision(spline, plan))
+            plan => GetDecision(spline, plan),
+            point => spline.Points[point].JunctionStartId >= 0 ? -1 : spline.Points[point].NextId,
+            point => spline.Points[point].Length)
     {
     }
 
@@ -168,13 +174,53 @@ public sealed class AiPursuitLaneSelector
         Func<int, int, bool> isSameDirection,
         Func<int, int, AiLaneChangeDirection, AiPursuitLanePhysicalRelation> getPhysicalRelation,
         Func<int, IReadOnlySet<int>, AiRouteSearchLimits, AiRouteSearchResult> tryPlan,
-        Func<AiRoutePlan, AiPursuitLaneDecision?> getDecision)
+        Func<AiRoutePlan, AiPursuitLaneDecision?> getDecision,
+        Func<int, int>? getPhysicalNext = null,
+        Func<int, float>? getPhysicalLength = null)
     {
         _getAdjacent = getAdjacent;
         _isSameDirection = isSameDirection;
         _getPhysicalRelation = getPhysicalRelation;
         _tryPlan = tryPlan;
         _getDecision = getDecision;
+        _getPhysicalNext = getPhysicalNext;
+        _getPhysicalLength = getPhysicalLength;
+    }
+
+    internal bool IsOnTargetPhysicalLane(int current, int target, AiRouteSearchLimits limits)
+    {
+        float distance = 0;
+        // No junction decisions/merges or route costs can prove physical lane membership.
+        int budget = Math.Max(1, limits.MaxVisitedNodes / 3);
+        while (current >= 0 && budget-- > 0 && distance <= limits.MaxDistanceMeters)
+        {
+            if (current == target) return true;
+            if (_getPhysicalNext == null || _getPhysicalLength == null) return false;
+            float length = _getPhysicalLength(current);
+            if (!float.IsFinite(length) || length < 0) return false;
+            distance += length;
+            current = _getPhysicalNext(current);
+        }
+        return false;
+    }
+
+    internal AiPursuitLaneSelection? SelectForTrafficReturn(int current, int target, AiRouteSearchLimits limits)
+    {
+        var neighbors = _getAdjacent(current);
+        int remaining = limits.MaxVisitedNodes;
+        foreach (var (point, direction) in new[] { (neighbors.LeftPointId, AiLaneChangeDirection.Left),
+                     (neighbors.RightPointId, AiLaneChangeDirection.Right) })
+        {
+            if (point < 0 || remaining <= 0 || !_isSameDirection(current, point)
+                || _getPhysicalRelation(current, point, direction) != Relation(direction)
+                || !IsOnTargetPhysicalLane(point, target, limits)) continue;
+            var route = _tryPlan(point, new HashSet<int> { target }, new(limits.MaxDistanceMeters, remaining));
+            remaining -= route.VisitedNodes;
+            if (route.Plan != null)
+                return new(current, point, direction, route.Plan, null)
+                { Motivation = AiPursuitLaneMotivation.TrafficReturn, PhysicalRelation = Relation(direction) };
+        }
+        return null;
     }
 
     public AiPursuitLaneSelectionResult Select(
@@ -298,6 +344,34 @@ public sealed class AiPursuitLaneSelector
             limits,
             maneuverDistanceMeters,
             lookaheadMeters);
+
+    internal IReadOnlyList<AiPursuitLaneSelection> SelectForTrafficBypass(
+        int currentPointId, int physicalTargetPointId, AiRouteSearchLimits limits)
+    {
+        var adjacent = _getAdjacent(currentPointId);
+        // Equivalent immediate target lanes remain forward-only destinations, never graph edges.
+        var targetNeighbors = _getAdjacent(physicalTargetPointId);
+        var targets = new HashSet<int> { physicalTargetPointId };
+        foreach (var (id, direction) in new[] { (targetNeighbors.LeftPointId, AiLaneChangeDirection.Left),
+                     (targetNeighbors.RightPointId, AiLaneChangeDirection.Right) })
+            if (id >= 0 && _isSameDirection(physicalTargetPointId, id)
+                && _getPhysicalRelation(physicalTargetPointId, id, direction) == Relation(direction))
+                targets.Add(id);
+        var result = new List<AiPursuitLaneSelection>(2);
+        int remaining = limits.MaxVisitedNodes;
+        foreach (var (id, direction) in new[] { (adjacent.LeftPointId, AiLaneChangeDirection.Left),
+                     (adjacent.RightPointId, AiLaneChangeDirection.Right) })
+        {
+            if (id < 0 || remaining <= 0 || !_isSameDirection(currentPointId, id)
+                || _getPhysicalRelation(currentPointId, id, direction) != Relation(direction)) continue;
+            var route = _tryPlan(id, targets, new(limits.MaxDistanceMeters, remaining));
+            remaining -= route.VisitedNodes;
+            if (route.Plan != null)
+                result.Add(new(currentPointId, id, direction, route.Plan, null)
+                { Motivation = AiPursuitLaneMotivation.TrafficBypass, PhysicalRelation = Relation(direction) });
+        }
+        return result;
+    }
 
     public AiPursuitLaneSelectionResult SelectForAlignment(
         int currentPointId,
